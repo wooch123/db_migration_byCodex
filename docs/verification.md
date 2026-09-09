@@ -53,9 +53,12 @@
 - 설치된 패키지 하나를 테스트 환경에서 제거한 후 실행 파일이 누락을 감지하고 자동 재설치하는 동작 확인.
 - 사용자 설정을 추가한 `.env`의 해시가 설치 전후 동일함을 확인.
 - `PIP_NO_INDEX=1` 상태에서 준비된 환경 재사용 및 CLI 실행 확인.
+- 로컬 wheelhouse만 사용하는 별도 빈 환경에서 인터넷 패키지 조회 없이 초기 설치 완료.
 - 자동 설치한 환경에서 하루치 가상 Claim 6건 검증 완료.
 - 공백·`&`·`!`가 포함된 프로젝트 경로, 인자 전달, 종료 코드, 설치 실패 시 앱 실행 중단 테스트 통과.
-- Linux 실행 파일 문법 검사 통과. GitHub Actions에 Ubuntu/Windows의 초기 설치·네트워크 없는 재실행 검증 추가.
+- Linux 실행 파일 문법 검사 통과. GitHub Actions에서 **Ubuntu/Windows의 초기 설치·네트워크 없는 재실행 검증 모두 통과**.
+
+자동 실행 파일 구현 커밋 `5cc06d19dab2763261b2d031a4a1acc042da24a9`의 [검증 실행 결과](https://github.com/wooch123/db_migration_byCodex/actions/runs/34345749022): Ubuntu Python 3.11/3.12/3.13 전체 테스트 70개, Windows/Ubuntu 실행 파일 검증, 정적 검사와 패키지 빌드가 모두 성공했습니다.
 
 GitHub Actions의 **Ubuntu + Python 3.11/3.12/3.13 세 환경 모두 테스트·정적 검사·패키지 빌드가 성공했습니다.** 검증한 구현 커밋은 `628bf4c69bb5ba2340f8222e100a41f0f48d5ae5`이며 [실행 결과](https://github.com/wooch123/db_migration_byCodex/actions/runs/34344266498)에서 확인할 수 있습니다.
 
