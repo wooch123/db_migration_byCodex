@@ -11,6 +11,7 @@ import time
 import tomllib
 from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_DIR = ROOT / ".venv"
@@ -22,6 +23,14 @@ class SetupError(Exception):
     def __init__(self, message: str, code: int = 1):
         super().__init__(message)
         self.code = code
+
+
+class PackageInstallError(SetupError):
+    """pip could not obtain or install the requested package set."""
+
+
+def package_key(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def locked_packages(path: Path, platform: str) -> dict[str, str]:
@@ -37,7 +46,7 @@ def locked_packages(path: Path, platform: str) -> dict[str, str]:
             raise SetupError(f"Unsupported requirements.lock entry: {line}")
         name, version, required_platform = match.groups()
         if required_platform is None or required_platform == platform:
-            result[name] = version
+            result[package_key(name)] = version
     return result
 
 
@@ -57,9 +66,15 @@ def inspect_environment() -> dict:
     setuptools = installed_version("setuptools")
     return {
         "missing": missing,
+        "installed": {
+            package_key(dist.metadata["Name"]): dist.version
+            for dist in importlib.metadata.distributions()
+            if dist.metadata["Name"]
+        },
+        "pip_version": installed_version("pip"),
         "project_version": installed_version("claim-sync"),
         "build_tools_missing": not setuptools
-        or int(setuptools.split(".", 1)[0]) < 77
+        or int(setuptools.split(".", 1)[0]) < 68
         or not installed_version("wheel"),
         "prefix": str(Path(sys.prefix).resolve()),
     }
@@ -158,14 +173,116 @@ def pip_install(*arguments):
         command += ["--no-index", "--find-links", str(folder)]
     result = execute([*command, *arguments])
     if result.returncode:
-        raise SetupError(
+        raise PackageInstallError(
             "Package installation failed. Check network/proxy access or the offline wheelhouse; then rerun."
         )
 
 
+def validated_pins(value) -> dict[str, str]:
+    if not isinstance(value, dict) or not value:
+        raise SetupError("The package selection is empty or invalid. Rerun setup to resolve dependencies.")
+    for name, version in value.items():
+        if (
+            not isinstance(name, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name)
+            or not isinstance(version, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+!-]*", version)
+        ):
+            raise SetupError("Invalid package name/version in the package selection.")
+    return {package_key(name): version for name, version in value.items()}
+
+
+def mismatched(pins: dict[str, str], info: dict) -> list[str]:
+    return [f"{name}=={version}" for name, version in pins.items() if info["installed"].get(name) != version]
+
+
+def resolve_compatible(project: dict, info: dict) -> dict[str, str]:
+    """Ask pip's resolver about the configured index/proxy, including transitive dependencies."""
+    pip_version = tuple(int(n) for n in (info.get("pip_version") or "0.0").split(".")[:2])
+    if pip_version < (22, 2):
+        pip_install("pip>=22.2")  # --dry-run / --report were introduced in pip 22.2.
+    print(
+        "[setup] Querying compatible versions through your existing pip index/proxy settings...",
+        flush=True,
+    )
+    # Reports can contain authenticated download URLs. Retain only names and versions.
+    with TemporaryDirectory(prefix="claim-sync-resolve-", dir=ENV_DIR) as folder:
+        report = Path(folder) / "report.json"
+        try:
+            pip_install(
+                "--dry-run",
+                "--ignore-installed",
+                "--only-binary=:all:",
+                "--report",
+                str(report),
+                *project["dependencies"],
+            )
+        except PackageInstallError as exc:
+            raise PackageInstallError(
+                "No compatible package set could be resolved from the configured index/proxy or wheelhouse. "
+                "Review pip's missing-package/conflict/SSL/proxy messages above. "
+                "See docs/operations.md."
+            ) from exc
+        data = json.loads(report.read_text(encoding="utf-8"))
+        selected = validated_pins(
+            {item["metadata"]["name"]: item["metadata"]["version"] for item in data["install"]}
+        )
+    print("[setup] Compatible package selection:", flush=True)
+    for name, version in sorted(selected.items()):
+        print(f"  {name}=={version}", flush=True)
+    return selected
+
+
+def install_selected(pins: dict[str, str]):
+    pip_install("--only-binary=:all:", *(f"{name}=={version}" for name, version in sorted(pins.items())))
+
+
+def select_runtime(project: dict, info: dict, previous: dict, fingerprint: str, mode: str):
+    locked = locked_packages(ROOT / "requirements.lock", sys.platform)
+    reusable = (
+        mode != "locked"
+        and previous.get("digest") == fingerprint
+        and previous.get("selection_mode") == "compatible"
+    )
+    if reusable:
+        try:
+            selected = validated_pins(previous.get("packages"))
+        except SetupError:
+            reusable = False
+        else:
+            if not mismatched(selected, info):
+                print("[setup] Reusing the previously verified compatible versions.", flush=True)
+                return selected, "compatible", False
+            print("[setup] Restoring the previously selected compatible versions...", flush=True)
+            try:
+                install_selected(selected)
+                return selected, "compatible", True
+            except PackageInstallError:
+                print("[setup] Previous versions unavailable; resolving another compatible set.", flush=True)
+    if not reusable and mode != "compatible":
+        if not info["missing"]:
+            return locked, "locked", False
+        print(
+            f"[setup] Installing {len(info['missing'])} missing or mismatched locked packages...", flush=True
+        )
+        try:
+            pip_install("-r", str(ROOT / "requirements.lock"))
+            return locked, "locked", True
+        except PackageInstallError:
+            if mode == "locked":
+                raise
+            print(
+                "[setup] Locked versions could not be installed. Trying compatible versions from the same source.",
+                flush=True,
+            )
+    selected = resolve_compatible(project, info)
+    install_selected(selected)
+    return selected, "compatible", True
+
+
 def manifest_digest() -> str:
     digest = hashlib.sha256(str(ROOT).encode())
-    for name in ("pyproject.toml", "requirements.lock"):
+    for name in ("pyproject.toml", "requirements.lock", "scripts/bootstrap.py", "scripts/runtime_check.py"):
         digest.update((ROOT / name).read_bytes())
     digest.update(f"{sys.platform}:{sys.version_info[:2]}".encode())
     return digest.hexdigest()
@@ -183,6 +300,9 @@ def create_default_env():
 
 
 def prepare():
+    mode = os.environ.get("CLAIM_SYNC_INSTALL_MODE", "auto").strip().lower()
+    if mode not in {"auto", "locked", "compatible"}:
+        raise SetupError("CLAIM_SYNC_INSTALL_MODE must be auto, locked, or compatible.")
     with setup_lock():
         ensure_venv()
         info = probe()
@@ -191,34 +311,46 @@ def prepare():
             previous = json.loads(STAMP.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             previous = {}
+        if not isinstance(previous, dict):
+            previous = {}
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
         install_project = (
             previous.get("digest") != fingerprint or info["project_version"] != project["version"]
         )
-        if info["missing"]:
-            print(
-                f"[setup] Installing {len(info['missing'])} missing or mismatched runtime packages...",
-                flush=True,
-            )
-            pip_install("-r", str(ROOT / "requirements.lock"))
+        # A failed repair/check must not leave an old success stamp reusable on the next run.
+        STAMP.unlink(missing_ok=True)
+        selected, selection_mode, changed = select_runtime(project, info, previous, fingerprint, mode)
         if install_project:
             if info["build_tools_missing"]:
                 print("[setup] Installing Python build tools...", flush=True)
-                pip_install("setuptools>=77", "wheel")
+                pip_install("setuptools>=68", "wheel")
             print("[setup] Installing the project in .venv...", flush=True)
             # Avoid build isolation so an offline wheelhouse can supply build tools too.
             pip_install("--no-deps", "--no-build-isolation", "--editable", str(ROOT))
-        if probe()["missing"]:
+        if mismatched(selected, probe()):
             raise SetupError(
-                "Installed versions do not match requirements.lock. Review the installation output."
+                "Installed versions do not match the selected package set. Review the installation output."
             )
         if execute([str(ENV_PYTHON), "-m", "pip", "--disable-pip-version-check", "check"]).returncode:
             raise SetupError(
                 "Dependency conflicts remain in .venv. Fix the reported conflicts before launching."
             )
+        if install_project or changed:
+            print("[setup] Checking web startup and the mock synchronization pipeline...", flush=True)
+            if execute([str(ENV_PYTHON), "-m", "scripts.runtime_check"]).returncode:
+                raise SetupError("Runtime compatibility check failed. The application was not started.")
         create_default_env()
+        resolved = ENV_DIR / "claim-sync-resolved.lock"
+        resolved.write_text(
+            "# Verified on this machine; names and versions only.\n"
+            + "".join(f"{name}=={version}\n" for name, version in sorted(selected.items())),
+            encoding="utf-8",
+        )
         temporary = STAMP.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"digest": fingerprint}), encoding="utf-8")
+        temporary.write_text(
+            json.dumps({"digest": fingerprint, "selection_mode": selection_mode, "packages": selected}),
+            encoding="utf-8",
+        )
         temporary.replace(STAMP)
         print("[setup] Ready. Existing .env settings were preserved.", flush=True)
 

@@ -12,6 +12,7 @@
 | `CLAIM_SYNC_WHEELHOUSE` | 패키지를 받을 로컬 wheel 폴더. 지정하면 `--no-index`로 인터넷 조회를 차단 |
 | `CLAIM_SYNC_NO_SYSTEM_INSTALL=1` | Python/venv가 없을 때 winget·apt 자동 설치를 하지 않고 종료 |
 | `CLAIM_SYNC_NO_PAUSE=1` | Windows에서 인자 없는 실행 실패 시 키 입력 대기를 생략 |
+| `CLAIM_SYNC_INSTALL_MODE` | `auto`(기본): 고정 버전 실패 시 호환 조합 조회. `compatible`: 처음부터 호환 조합 조회. `locked`: 고정 버전만 허용 |
 
 이 변수는 `.env`를 읽기 전 설치 단계에서 사용하므로 **실행할 터미널의 환경변수로 지정**합니다.
 
@@ -30,7 +31,7 @@ Python 자동 설치는 Windows의 winget(`Python.Python.3.12`, 사용자 범위
 
 ```bash
 python -m pip wheel -r requirements.lock --wheel-dir wheelhouse
-python -m pip wheel 'setuptools>=77' wheel --wheel-dir wheelhouse
+python -m pip wheel 'setuptools>=68' wheel --wheel-dir wheelhouse
 ```
 
 프로젝트와 wheelhouse를 반입한 후 실행합니다. 운영체제의 Python/venv 패키지는 사내 배포판 저장소 또는 별도 설치 매체로 준비해야 합니다.
@@ -45,6 +46,41 @@ $env:CLAIM_SYNC_WHEELHOUSE = 'D:\wheelhouse'
 ```
 
 사내 PyPI mirror와 프록시는 pip 표준 설정(`PIP_INDEX_URL`, `HTTPS_PROXY` 등)을 사용할 수 있습니다. 인증 정보를 Git에 저장하지 마세요. `.env`는 없을 때만 예제를 복사하며 설치 재시도·재실행 시 원래 파일을 덮어쓰지 않습니다.
+
+## 사내 저장소 호환 설치
+
+`annotated-doc==0.0.5` 등 고정한 버전이 사내 저장소에 없으면 기본 `auto` 모드가 호환 설치로 전환합니다. `run.bat`와 `run.sh`가 같은 설치 모듈을 사용하므로 두 환경에 모두 적용됩니다. 바로 호환 설치를 시작하려면 Windows PowerShell에서 실행합니다.
+
+```powershell
+$env:CLAIM_SYNC_INSTALL_MODE = 'compatible'
+.\run.bat
+```
+
+기존 pip 설정(`pip.ini`, `PIP_CONFIG_FILE`, `PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`, `PIP_PROXY`, `HTTPS_PROXY`, `PIP_CERT` 등)을 모든 조회·다운로드에 그대로 사용합니다. 설치 프로그램이 공개 PyPI 주소를 추가하거나 프록시를 우회하지 않습니다. 앞서 터미널에서 공개 PyPI 주소를 임시로 지정했다면 새 터미널을 열어 기존 사내 pip 설정을 사용하세요. 사내 저장소/프록시 주소를 직접 지정해야 하는 경우 아래 예시 주소를 실제 값으로 바꿉니다.
+
+```powershell
+$env:PIP_INDEX_URL = 'https://packages.company.example/simple'
+$env:PIP_PROXY = 'http://proxy.company.example:8080'
+$env:CLAIM_SYNC_INSTALL_MODE = 'compatible'
+.\run.bat --setup-only
+```
+
+사내 저장소에 직접 연결하는 환경이라면 프록시 변수는 설정하지 않아도 됩니다. 설치용 변수는 앱의 `.env`가 아닌 **터미널 환경변수 또는 pip 설정**에 지정합니다.
+
+호환 설치 과정:
+
+1. `pyproject.toml`의 지원 범위로 pip의 의존성 해석기를 실행합니다. `--dry-run --ignore-installed --report`로 현재 저장소의 후보와 하위 의존성을 함께 비교합니다. 예를 들어 최신 FastAPI가 필요한 `annotated-doc`을 찾지 못하면, 지원 범위 안에서 그 패키지가 필요 없는 이전 FastAPI도 검토합니다.
+2. Python 버전·운영체제에 맞는 wheel이 있는 조합을 선택하고 이름·버전을 콘솔에 출력합니다. Windows에서 C/Rust 빌드 도구 설치를 요구하지 않도록 호환 런타임 조회는 wheel 파일로 제한합니다.
+3. 선택한 버전을 설치하고 `pip check`로 충돌을 검사합니다. 새로 준비하거나 복구한 환경은 임시 DB에서 가상 Claim 6건의 조회·제품 보강·전송, 웹 응답과 OpenAPI 생성도 확인합니다. 이 검사는 사용자 `.env`, 실제 DB와 사내 API를 사용하지 않습니다.
+4. 성공한 조합을 `.venv/claim-sync-resolved.lock`, 설치 상태를 `.venv/.claim-sync-setup.json`에 기록합니다. 원본 pip 보고서는 삭제하며 인증 URL은 기록하지 않습니다. 다음 실행은 이 버전을 재사용하고 누락 시 같은 버전으로 복구합니다. 그 버전도 더 이상 제공되지 않으면 다시 호환 조합을 찾습니다.
+
+패키지 요구사항이나 설치·검증 모듈이 바뀌면 재검증합니다. 새 버전을 다시 선택하려면 앱을 종료한 뒤 `.venv/.claim-sync-setup.json` 파일만 삭제하고 `compatible` 모드로 실행하세요. 설치가 완료되지 않았거나 의존성·동작 검사가 실패하면 성공 상태를 저장하지 않고 앱을 시작하지 않습니다.
+
+호환 범위는 버전 번호만으로 모든 조합의 정상 동작을 보장하지 않으므로 선택한 환경에서 실제 동작 검사도 수행합니다. 범위 내 모든 후보가 없거나 프록시·SSL 연결이 실패하면 자동 설치도 완료할 수 없습니다. 콘솔의 마지막 누락 패키지/의존성 충돌 메시지를 확인하고 사내 저장소에 필요한 wheel을 등록하세요. `from versions: none`만으로 버전 미등록과 접속 실패를 구분할 수는 없습니다.
+
+호환 조회에는 pip 22.2 이상이 필요하며 더 오래된 pip는 같은 저장소에서 업그레이드를 시도합니다. `CLAIM_SYNC_WHEELHOUSE`가 설정되어 있으면 호환 조회와 다운로드도 해당 폴더만 사용합니다. `locked` 모드는 기존 `requirements.lock`과 정확히 일치하는 버전만 허용하며 자동 대체하지 않습니다.
+
+조회 방식은 pip 공식 문서의 [설치 결과 보고서](https://pip.pypa.io/en/stable/reference/installation-report/)와 [의존성 해석](https://pip.pypa.io/en/stable/topics/dependency-resolution/)을 따릅니다.
 
 ## Ubuntu systemd 설치
 

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,8 +8,8 @@ version = "1.0.0"
 description = "Claim enrichment and scheduled FAR synchronization"
 requires-python = ">=3.11"
 dependencies = [
-  "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "httpx>=0.28,<1",
-  "pydantic-settings>=2.8,<3", "filelock>=3.18,<4", "tzdata>=2025.1"
+  "fastapi>=0.115,<0.142", "uvicorn>=0.34,<0.53", "httpx>=0.28,<0.29",
+  "pydantic>=2.7,<3", "pydantic-settings>=2.8,<3", "filelock>=3.18,<4", "tzdata>=2025.1"
 ]
 
 [project.optional-dependencies]

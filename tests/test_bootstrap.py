@@ -21,16 +21,27 @@ def setup_project(tmp_path, monkeypatch):
     env_dir.mkdir()
     (tmp_path / "requirements.lock").write_text("sample==1.0.0\n", encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname="claim-sync"\nversion="1.0.0"\n', encoding="utf-8"
+        '[project]\nname="claim-sync"\nversion="1.0.0"\ndependencies=["sample>=0.5,<2"]\n', encoding="utf-8"
     )
+    (tmp_path / "scripts").mkdir()
+    for name in ("bootstrap.py", "runtime_check.py"):
+        (tmp_path / "scripts" / name).write_text("# test script\n", encoding="utf-8")
     (tmp_path / ".env.example").write_text("APP_MODE=mock\n", encoding="utf-8")
     monkeypatch.setattr(bootstrap, "ROOT", tmp_path)
     monkeypatch.setattr(bootstrap, "ENV_DIR", env_dir)
     monkeypatch.setattr(bootstrap, "STAMP", env_dir / ".claim-sync-setup.json")
     monkeypatch.setattr(bootstrap, "ensure_venv", lambda: None)
+    monkeypatch.delenv("CLAIM_SYNC_INSTALL_MODE", raising=False)
     monkeypatch.setattr(bootstrap, "execute", lambda *args, **kwargs: SimpleNamespace(returncode=0))
     monkeypatch.setattr(
-        bootstrap, "probe", lambda: {"missing": [], "project_version": "1.0.0", "build_tools_missing": False}
+        bootstrap,
+        "probe",
+        lambda: {
+            "missing": [],
+            "installed": {"sample": "1.0.0"},
+            "project_version": "1.0.0",
+            "build_tools_missing": False,
+        },
     )
     installed = []
     monkeypatch.setattr(bootstrap, "pip_install", lambda *args: installed.append(args))
@@ -70,7 +81,7 @@ def test_missing_packages_are_repaired_even_with_existing_stamp(setup_project, m
     answers = iter(
         [
             {"missing": ["sample==1.0.0"], "project_version": "1.0.0", "build_tools_missing": False},
-            {"missing": []},
+            {"missing": [], "installed": {"sample": "1.0.0"}},
         ]
     )
     monkeypatch.setattr(bootstrap, "probe", lambda: next(answers))
@@ -122,6 +133,139 @@ def test_refuses_non_virtual_interpreter(monkeypatch):
     )
     with pytest.raises(bootstrap.SetupError, match="global install"):
         bootstrap.probe()
+
+
+def test_auto_falls_back_then_reuses_compatible_selection(setup_project, monkeypatch):
+    root, installed = setup_project
+    info = {
+        "missing": ["sample==1.0.0"],
+        "installed": {},
+        "project_version": "1.0.0",
+        "build_tools_missing": False,
+    }
+    monkeypatch.setattr(bootstrap, "probe", lambda: info)
+    resolved = []
+    monkeypatch.setattr(
+        bootstrap, "resolve_compatible", lambda *args: resolved.append(True) or {"sample": "0.9.0"}
+    )
+
+    def install(*args):
+        installed.append(args)
+        if "-r" in args:
+            raise bootstrap.PackageInstallError("No matching distribution found")
+        if "sample==0.9.0" in args:
+            info["installed"]["sample"] = "0.9.0"
+
+    monkeypatch.setattr(bootstrap, "pip_install", install)
+    bootstrap.prepare()
+    saved = json.loads(bootstrap.STAMP.read_text())
+    assert saved["selection_mode"] == "compatible"
+    assert saved["packages"] == {"sample": "0.9.0"}
+    assert "sample==0.9.0" in (root / ".venv/claim-sync-resolved.lock").read_text()
+    installed.clear()
+    bootstrap.prepare()
+    assert installed == [] and resolved == [True]
+    # Repair against the saved version rather than retrying the unavailable release lock.
+    info["installed"].clear()
+    bootstrap.prepare()
+    assert installed == [("--only-binary=:all:", "sample==0.9.0")]
+
+
+def test_locked_mode_never_falls_back(setup_project, monkeypatch):
+    monkeypatch.setenv("CLAIM_SYNC_INSTALL_MODE", "locked")
+    monkeypatch.setattr(
+        bootstrap, "probe", lambda: {"missing": ["sample==1.0.0"], "project_version": "1.0.0"}
+    )
+
+    def fail(*args):
+        raise bootstrap.PackageInstallError("No matching distribution")
+
+    monkeypatch.setattr(bootstrap, "pip_install", fail)
+    monkeypatch.setattr(bootstrap, "resolve_compatible", lambda *args: pytest.fail("Unexpected fallback"))
+    with pytest.raises(bootstrap.PackageInstallError):
+        bootstrap.prepare()
+    assert not bootstrap.STAMP.exists()
+
+
+def test_compatible_mode_queries_current_source_without_forcing_pins(setup_project, monkeypatch):
+    _, installed = setup_project
+    monkeypatch.setenv("CLAIM_SYNC_INSTALL_MODE", "compatible")
+    monkeypatch.setattr(bootstrap, "resolve_compatible", lambda *args: {"sample": "1.0.0"})
+    bootstrap.prepare()
+    assert installed[0] == ("--only-binary=:all:", "sample==1.0.0")
+    assert not any("-r" in call for call in installed)
+
+
+def test_resolver_uses_ranges_and_discards_download_credentials(tmp_path, monkeypatch):
+    monkeypatch.setattr(bootstrap, "ENV_DIR", tmp_path)
+    recorded = []
+
+    def resolve(*args):
+        recorded.append(args)
+        report = Path(args[args.index("--report") + 1])
+        report.write_text(
+            json.dumps(
+                {
+                    "install": [
+                        {
+                            "metadata": {"name": "sample", "version": "0.9.0"},
+                            "download_info": {"url": "https://user:secret@example.invalid/sample.whl"},
+                        },
+                        {"metadata": {"name": "sub_dependency", "version": "1.2.0"}},
+                    ]
+                }
+            )
+        )
+
+    monkeypatch.setattr(bootstrap, "pip_install", resolve)
+    result = bootstrap.resolve_compatible({"dependencies": ["sample>=0.5,<2"]}, {"pip_version": "24.0"})
+    assert result == {"sample": "0.9.0", "sub-dependency": "1.2.0"}
+    assert "--dry-run" in recorded[0] and "--ignore-installed" in recorded[0]
+    assert "sample>=0.5,<2" in recorded[0]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_pip_preserves_configured_proxy_and_index(monkeypatch):
+    monkeypatch.delenv("CLAIM_SYNC_WHEELHOUSE", raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example.invalid:8080")
+    monkeypatch.setenv("PIP_INDEX_URL", "https://mirror.example.invalid/simple")
+    recorded = []
+    monkeypatch.setattr(
+        bootstrap, "execute", lambda args: recorded.append(args) or SimpleNamespace(returncode=0)
+    )
+    bootstrap.pip_install("sample>=0.5,<2")
+    assert "--index-url" not in recorded[0] and "--isolated" not in recorded[0]
+    assert os.environ["HTTPS_PROXY"] == "http://proxy.example.invalid:8080"
+    assert os.environ["PIP_INDEX_URL"] == "https://mirror.example.invalid/simple"
+
+
+def test_conflict_or_runtime_failure_does_not_save_success(setup_project, monkeypatch):
+    root, _ = setup_project
+    monkeypatch.setattr(bootstrap, "execute", lambda *args, **kwargs: SimpleNamespace(returncode=1))
+    with pytest.raises(bootstrap.SetupError, match="conflicts"):
+        bootstrap.prepare()
+    assert not bootstrap.STAMP.exists() and not (root / ".env").exists()
+    monkeypatch.setattr(
+        bootstrap,
+        "execute",
+        lambda args, **kwargs: SimpleNamespace(returncode=int("scripts.runtime_check" in args)),
+    )
+    with pytest.raises(bootstrap.SetupError, match="Runtime compatibility"):
+        bootstrap.prepare()
+    assert not bootstrap.STAMP.exists() and not (root / ".venv/claim-sync-resolved.lock").exists()
+
+
+def test_unresolved_fallback_does_not_install_project(setup_project, monkeypatch):
+    _, installed = setup_project
+    monkeypatch.setenv("CLAIM_SYNC_INSTALL_MODE", "compatible")
+
+    def fail(*args):
+        raise bootstrap.PackageInstallError("No compatible package set")
+
+    monkeypatch.setattr(bootstrap, "resolve_compatible", fail)
+    with pytest.raises(bootstrap.PackageInstallError, match="No compatible"):
+        bootstrap.prepare()
+    assert installed == [] and not bootstrap.STAMP.exists()
 
 
 @pytest.fixture
