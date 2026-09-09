@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-PRODUCT_FIELDS = ("app", "device", "ctrl", "density", "nand_gen", "nand_ver", "dram_gen", "dram_ver")
+PRODUCT_FIELDS = ("app", "device", "ctrl", "denstiy", "nand_gen", "nand_ver", "dram_gen", "dram_ver")
 STRING_MAPPING = {
     "far_no": "farNo",
     "sample_no": "sampleNo",
@@ -60,8 +60,10 @@ def map_record(claim: dict, product: dict) -> dict:
     for field in ("far_no", "sample_no", "rcv_date", "part_id"):
         if not values[field] or not str(values[field]).strip():
             raise ValueError(f"{field}: 필수 값이 비어 있습니다.")
-    for field in ("app", "device", "ctrl", "density"):
+    for field in ("app", "device", "ctrl"):
         values[field] = scalar(product[field], field)
+    # The upstream product field is spelled denstiy; FAR still expects density.
+    values["density"] = scalar(product["denstiy"], "denstiy")
     for field in ("nand", "dram"):
         parts = [scalar(product[f"{field}_{suffix}"], f"{field}_{suffix}") for suffix in ("gen", "ver")]
         values[field] = " ".join(p.strip() for p in parts if p and p.strip()) or None

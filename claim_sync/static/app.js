@@ -623,7 +623,7 @@ const mapping = [
   ["ctrl", "제품 · ctrl", "문자열"],
   ["nand", "제품 · nand_gen + nand_ver", "공백 하나로 결합 · 빈 값 제외"],
   ["dram", "제품 · dram_gen + dram_ver", "공백 하나로 결합 · 빈 값 제외"],
-  ["density", "제품 · density", "문자열"],
+  ["density", "제품 · denstiy", "문자열"],
 ];
 $("mapping-body").innerHTML = mapping
   .map(

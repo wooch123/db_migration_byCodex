@@ -57,7 +57,7 @@ def product():
         "app": "SSD",
         "device": "NVMe",
         "ctrl": "CTRL",
-        "density": "1 TB",
+        "denstiy": "1 TB",
         "nand_gen": "V8",
         "nand_ver": "1.0",
         "dram_gen": "LPDDR4",

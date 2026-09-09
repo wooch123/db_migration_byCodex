@@ -69,7 +69,7 @@ def create_mock_app(settings: Settings, store: Store) -> FastAPI:
                 "app": "Client SSD",
                 "device": "NVMe",
                 "ctrl": "Demo Controller",
-                "density": "1 TB",
+                "denstiy": "1 TB",
                 "nand_gen": "V8",
                 "nand_ver": "1.0",
                 "dram_gen": "LPDDR4",

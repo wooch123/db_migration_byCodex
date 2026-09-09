@@ -28,10 +28,12 @@ GET {PRODUCT_BASE_URL}/dbms/api/product-info/record/ABCDEFGHIJKLMNO
 schema는 JSON Schema `properties` 또는 `fields`/`columns` 배열을 지원합니다. 배열 항목은 문자열 또는 `name`, `field`, `column_name` 속성을 가진 객체입니다. `data`/`schema` 래퍼도 지원합니다.
 
 ```json
-{"columns": ["app","device","ctrl","density","nand_gen","nand_ver","dram_gen","dram_ver"]}
+{"columns": ["app","device","ctrl","denstiy","nand_gen","nand_ver","dram_gen","dram_ver"]}
 ```
 
 제품 값은 직접 객체, 래퍼 또는 단일 항목 배열을 지원합니다. 별도 구조는 `PRODUCT_RECORDS_PATH`로 지정합니다. 반환 객체에는 8개 필드가 모두 존재해야 하며 값은 문자열·숫자·null을 허용합니다. 2개 이상 제품 레코드가 반환되면 임의로 첫 번째를 선택하지 않고 실패합니다.
+
+제품 schema와 제품 응답의 용량 필드는 `denstiy`입니다. FAR API에 전송할 때는 기존 철자인 `density`로 매핑합니다.
 
 `partId[:15]`를 URL 인코딩해 조회합니다. 15자 미만이면 오류입니다. 목적지 `part_id`에는 원본 전체 문자열을 보존합니다. 제품 캐시는 실행 간 공유하지 않아 제품 정보 변경을 다음 실행에 반영합니다.
 
@@ -59,7 +61,7 @@ schema는 JSON Schema `properties` 또는 `fields`/`columns` 배열을 지원합
 | ctrl | 제품 ctrl | 문자열 또는 null |
 | nand | 제품 nand_gen + nand_ver | 비어 있지 않은 값을 공백 한 칸으로 결합 |
 | dram | 제품 dram_gen + dram_ver | 비어 있지 않은 값을 공백 한 칸으로 결합 |
-| density | 제품 density | 문자열 또는 null |
+| density | 제품 denstiy | 문자열 또는 null |
 
 ISO timestamp의 날짜는 원본 시간대에서의 달력 날짜로 유지합니다. 날짜를 UTC로 옮겨 하루가 바뀌지 않습니다. 선택 날짜의 `null`/빈 문자열은 `null`로, 잘못된 날짜는 오류로 처리합니다. NAND/DRAM 양쪽 모두 비면 `null`입니다. 원본 선택 필드가 없는 경우도 null이므로 **운영 서버가 null을 기존 값 삭제로 처리하는지** 사내 검증에서 확인해야 합니다.
 

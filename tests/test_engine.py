@@ -134,9 +134,9 @@ async def test_changed_product_is_posted_and_a_b_a_uses_new_operation_key(settin
     transport, calls = custom_transport(claim, product)
     assert (await run(settings, store, spec, transport))["succeeded"] == 1
     assert (await run(settings, store, spec, transport))["skipped"] == 1
-    product["density"] = "2 TB"
+    product["denstiy"] = "2 TB"
     assert (await run(settings, store, spec, transport))["succeeded"] == 1
-    product["density"] = "1 TB"
+    product["denstiy"] = "1 TB"
     assert (await run(settings, store, spec, transport))["succeeded"] == 1
     posts = [request for request in calls if request.method == "POST"]
     assert len(posts) == 3
