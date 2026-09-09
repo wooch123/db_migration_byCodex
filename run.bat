@@ -70,11 +70,11 @@ exit /b %CLAIM_SYNC_EXIT_CODE%
 :find_python
 call :try_python "%~dp0.venv\Scripts\python.exe"
 if defined CLAIM_SYNC_BOOTSTRAP_PYTHON exit /b 0
-for /f "delims=" %%P in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do call :try_python "%%P"
-if defined CLAIM_SYNC_BOOTSTRAP_PYTHON exit /b 0
 call :try_python python.exe
 if defined CLAIM_SYNC_BOOTSTRAP_PYTHON exit /b 0
 call :try_python python3.exe
+if defined CLAIM_SYNC_BOOTSTRAP_PYTHON exit /b 0
+for /f "delims=" %%P in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do call :try_python "%%P"
 if defined CLAIM_SYNC_BOOTSTRAP_PYTHON exit /b 0
 for %%V in (314 313 312 311) do call :try_python "%LocalAppData%\Programs\Python\Python%%V\python.exe"
 if defined CLAIM_SYNC_BOOTSTRAP_PYTHON exit /b 0

@@ -27,6 +27,8 @@ CLAIM_SYNC_PYTHON=/usr/bin/python3.12 ./run.sh --setup-only
 
 Python 자동 설치는 Windows의 winget(`Python.Python.3.12`, 사용자 범위)과 Ubuntu/Debian의 apt를 지원합니다. Ubuntu/Debian에서 venv/ensurepip 모듈이 누락되면 선택한 Python 버전에 맞는 `python3.x-venv` 설치도 시도합니다. sudo 암호를 물어볼 수 있습니다. 별도 PPA 추가나 시스템 Python 교체는 하지 않으므로 기본 저장소가 Python 3.10 이하인 배포판은 3.11 이상의 Python을 별도로 준비하세요. 다른 Linux 배포판에서도 Python과 venv가 이미 있으면 Python 패키지 자동 설치는 그대로 동작합니다.
 
+Windows에서는 `CLAIM_SYNC_PYTHON`으로 명시한 실행 파일, 기존 `.venv`, 현재 PATH의 Python, `py -3` 순서로 선택합니다. 여러 Python이 설치되어 있어도 현재 터미널에서 패키지를 준비한 Python을 우선 사용합니다. 오프라인 wheel은 실제 사용할 Python의 버전·운영체제·CPU와 일치해야 합니다.
+
 폐쇄망에서는 동일한 운영체제·Python 버전·CPU의 인터넷 연결 환경에서 런타임뿐 아니라 설치용 build 도구도 준비합니다.
 
 ```bash

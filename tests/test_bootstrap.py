@@ -333,3 +333,28 @@ def test_setup_failure_does_not_start_application(launcher_checkout):
     assert result.returncode != 0
     assert (launcher_checkout / "setup-called").exists()
     assert '["worker"]' not in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Python launcher selection")
+def test_windows_prefers_path_python_over_py_default(tmp_path):
+    root = tmp_path / "checkout"
+    root.mkdir()
+    shutil.copy2(REPO / "run.bat", root / "run.bat")
+    (root / "scripts").mkdir()
+    (root / "scripts/bootstrap.py").write_text(
+        'import sys\nfrom pathlib import Path\nPath("selected-python").write_text(sys.executable)\n',
+        encoding="utf-8",
+    )
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    (commands / "py.cmd").write_bytes(
+        f'@echo off\r\necho used>"%~dp0py-called"\r\necho {sys.executable}\r\n'.encode()
+    )
+    result = run_launcher(
+        root,
+        ["--setup-only"],
+        PATH=os.pathsep.join([str(commands), str(Path(sys.executable).parent), os.environ.get("PATH", "")]),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert Path((root / "selected-python").read_text()).resolve() == Path(sys.executable).resolve()
+    assert not (commands / "py-called").exists()
