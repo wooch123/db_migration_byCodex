@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Claim 접수 이력 수집, 제품 정보 보강 및 FAR 데이터 자동 갱신 관리"
+    />
+    <title>Claim Sync · 데이터 동기화</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/"
+        ><span class="brand-icon">⇄</span
+        ><span
+          >Claim<span class="brand-light">Sync</span
+          ><small>DATA OPERATIONS</small></span
+        ></a
+      >
+      <div class="workspace">
+        <span class="workspace-mark">F</span>
+        <div>FAR Workspace<small>데이터 관리 콘솔</small></div>
+        <span class="muted">⌄</span>
+      </div>
+      <div class="nav-label">WORKSPACE</div>
+      <nav aria-label="주 메뉴">
+        <button class="nav-item active" data-view="dashboard">
+          <span>▦</span>동기화 대시보드
+        </button>
+        <button class="nav-item" data-view="history">
+          <span>◷</span>실행 이력<span id="history-count" class="nav-count"
+            >0</span
+          >
+        </button>
+        <button class="nav-item" data-view="schedule">
+          <span>◴</span>자동 갱신 스케줄
+        </button>
+        <button class="nav-item" data-view="connections">
+          <span>⇌</span>API 연결 및 매핑
+        </button>
+        <button class="nav-item" data-view="attention">
+          <span>◎</span>전송 확인 대기<span
+            id="attention-count"
+            class="nav-count"
+            >0</span
+          >
+        </button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div>
+          <span id="runner-dot" class="dot"></span
+          ><span id="runner-label">실행기 확인 중</span>
+        </div>
+        <small>Claim Sync <span>v1.0.0</span></small>
+        <p>수집부터 갱신까지,<br />한곳에서 관리하세요.</p>
+      </div>
+    </aside>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <span class="breadcrumb">Workspace</span><span class="divider">/</span
+          ><span id="breadcrumb">동기화 대시보드</span>
+        </div>
+        <div class="topbar-right">
+          <span id="env-badge" class="badge">연결 중</span
+          ><span class="avatar">OP</span>
+        </div>
+      </header>
+      <main>
+        <div class="page-heading">
+          <div>
+            <div class="eyebrow">CLAIM DATA PIPELINE</div>
+            <h1 id="page-title">Claim 데이터 동기화</h1>
+            <p id="page-subtitle">
+              접수 이력을 수집하고 제품 정보를 더해, FAR 데이터를 최신 상태로
+              유지하세요.
+            </p>
+          </div>
+          <button class="button secondary" id="check-api">
+            <span>⇌</span> API 연결 확인
+          </button>
+        </div>
+        <div
+          id="connection-error"
+          class="notice danger"
+          role="alert"
+          hidden
+        ></div>
+        <div id="environment-notice" class="notice">
+          <span class="notice-icon">◈</span>
+          <div>
+            <strong id="environment-title"
+              >환경 정보를 확인하고 있습니다.</strong
+            >
+            <p id="environment-description">
+              설정된 API와 실행기 상태를 불러옵니다.
+            </p>
+          </div>
+          <span id="environment-right" class="notice-end">.env 설정</span>
+        </div>
+
+        <section id="view-dashboard" class="view">
+          <div class="metrics">
+            <article class="metric">
+              <div>조회한 Claim <span>↙</span></div>
+              <strong id="metric-fetched">0<span>건</span></strong
+              ><small>선택한 실행 기준</small>
+            </article>
+            <article class="metric">
+              <div>처리 성공 <span class="green">✓</span></div>
+              <strong id="metric-success">0<span>건</span></strong
+              ><small id="metric-success-note">검증 또는 전송 완료</small>
+            </article>
+            <article class="metric">
+              <div>오류 / 확인 대기 <span class="amber">!</span></div>
+              <strong id="metric-failed">0<span>건</span></strong
+              ><small id="metric-failed-note">레코드 및 조회 구간 오류</small>
+            </article>
+            <article class="metric">
+              <div>다음 자동 갱신 <span>◷</span></div>
+              <strong id="metric-next" class="metric-time">예약 없음</strong
+              ><small id="metric-schedule-note">스케줄을 설정해 보세요</small>
+            </article>
+          </div>
+          <div class="pipeline card">
+            <div class="pipeline-title">
+              <span class="eyebrow">SYNC WORKFLOW</span
+              ><strong>데이터 처리 흐름</strong>
+            </div>
+            <div class="pipeline-step">
+              <span class="step-number">01</span>
+              <div>
+                <strong>Claim 수집</strong
+                ><small>접수일 기준 · 기간 분할 조회</small>
+              </div>
+            </div>
+            <span class="pipeline-arrow">→</span>
+            <div class="pipeline-step">
+              <span class="step-number">02</span>
+              <div>
+                <strong>제품 정보 보강</strong
+                ><small>Part ID 앞 15자 · 8개 필드</small>
+              </div>
+            </div>
+            <span class="pipeline-arrow">→</span>
+            <div class="pipeline-step">
+              <span class="step-number">03</span>
+              <div>
+                <strong>FAR 데이터 갱신</strong
+                ><small>21개 필드 변환 · API 전송</small>
+              </div>
+            </div>
+          </div>
+          <div class="dashboard-grid">
+            <section class="card config-card">
+              <div class="card-heading">
+                <h2>동기화 설정</h2>
+                <span class="pill neutral">수동 실행</span>
+              </div>
+              <form id="run-form">
+                <label class="field-title">조회 기간</label>
+                <div class="segmented" role="group" aria-label="기간 선택 방식">
+                  <button type="button" class="selected" data-period="relative">
+                    최근 기간</button
+                  ><button type="button" data-period="absolute">
+                    날짜 직접 지정
+                  </button>
+                </div>
+                <div id="relative-fields">
+                  <label for="months">최근 몇 개월을 가져올까요?</label
+                  ><select id="months">
+                    <option value="1">최근 1개월</option>
+                    <option value="2">최근 2개월</option>
+                    <option value="3">최근 3개월</option>
+                    <option value="6">최근 6개월</option>
+                    <option value="12">최근 12개월</option>
+                  </select>
+                  <p class="help">
+                    실행일 기준으로 기간을 다시 계산합니다. 오늘을 포함합니다.
+                  </p>
+                </div>
+                <div id="absolute-fields" class="two-fields" hidden>
+                  <div>
+                    <label for="start-date">시작일</label
+                    ><input id="start-date" type="date" value="2025-01-01" />
+                  </div>
+                  <div>
+                    <label for="end-date">종료일</label
+                    ><input id="end-date" type="date" value="2025-12-31" />
+                  </div>
+                </div>
+                <div class="form-divider"></div>
+                <label class="field-title" for="chunk-days"
+                  >한 번에 가져올 기간
+                  <span class="label-tag">분할 조회</span></label
+                >
+                <div class="input-unit">
+                  <input
+                    id="chunk-days"
+                    type="number"
+                    value="7"
+                    min="1"
+                    max="366"
+                    required
+                  /><span>일씩</span>
+                </div>
+                <p class="help">
+                  API 한도에 닿으면 더 작은 기간으로 자동 분할합니다.
+                </p>
+                <div class="range-summary" id="range-preview">
+                  조회 기간 계산 중…
+                </div>
+                <label class="field-title" for="execution-mode">실행 방식</label
+                ><select id="execution-mode">
+                  <option value="validate">
+                    전송 없이 검증 · 데이터 미리보기
+                  </option>
+                  <option value="send">API 전송 · 대상 데이터 갱신</option>
+                </select>
+                <p class="help" id="execution-hint">
+                  검증 모드는 전송 데이터를 만들고 결과만 저장합니다.
+                </p>
+                <button
+                  class="button primary full"
+                  id="run-button"
+                  type="submit"
+                >
+                  <span>▷</span> 동기화 실행
+                </button>
+              </form>
+            </section>
+            <section class="card activity-card">
+              <div class="card-heading">
+                <h2>실행 현황</h2>
+                <span id="job-status" class="pill neutral">실행 전</span>
+              </div>
+              <div class="activity-summary">
+                <div>
+                  <strong id="job-title">첫 동기화를 시작해 보세요</strong>
+                  <p id="job-meta">
+                    왼쪽에서 조회 기간과 실행 방식을 설정하세요.
+                  </p>
+                </div>
+                <div class="inline-buttons">
+                  <button
+                    class="button small secondary"
+                    id="retry-button"
+                    hidden
+                  >
+                    다시 실행</button
+                  ><button
+                    class="button small danger-button"
+                    id="cancel-button"
+                    hidden
+                  >
+                    중지
+                  </button>
+                </div>
+              </div>
+              <div class="progress-label">
+                <span id="progress-label">진행 상태</span
+                ><strong id="progress-value">대기 중</strong>
+              </div>
+              <progress
+                id="job-progress"
+                value="0"
+                max="100"
+                aria-label="동기화 진행률"
+              ></progress>
+              <div class="chunk-header">
+                <span>조회 구간</span
+                ><small id="chunk-note"
+                  >기간별 처리 상태가 여기에 표시됩니다.</small
+                >
+              </div>
+              <div id="chunk-list" class="chunk-list">
+                <span class="empty-inline">아직 조회한 구간이 없습니다.</span>
+              </div>
+              <div id="job-error" class="notice danger compact" hidden></div>
+              <div class="log-heading">
+                <h3>실행 로그</h3>
+                <label class="checkbox"
+                  ><input type="checkbox" id="errors-only" />오류만 보기</label
+                >
+              </div>
+              <div
+                id="event-log"
+                class="event-log"
+                role="log"
+                aria-label="실행 로그"
+              >
+                <div class="log-empty">
+                  <span>≋</span
+                  ><strong>진행 상황을 실시간으로 확인하세요</strong>
+                  <p>수집, 제품 조회, 전송 단계와 오류가 기록됩니다.</p>
+                </div>
+              </div>
+            </section>
+          </div>
+          <section class="card records-card">
+            <div class="card-heading">
+              <div>
+                <h2>
+                  데이터 미리보기
+                  <span id="record-count" class="count-label">0</span>
+                </h2>
+                <p>행을 선택하면 실제 전송할 전체 JSON을 확인할 수 있습니다.</p>
+              </div>
+              <div class="inline-buttons">
+                <select id="record-filter" aria-label="레코드 상태 필터">
+                  <option value="">전체 상태</option>
+                  <option value="validated">검증 완료</option>
+                  <option value="sent">전송 완료</option>
+                  <option value="skipped">변경 없음</option>
+                  <option value="failed">실패</option>
+                  <option value="uncertain">확인 대기</option></select
+                ><button
+                  id="export-button"
+                  class="button secondary small"
+                  disabled
+                >
+                  ↓ 결과 내보내기
+                </button>
+              </div>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>FAR NO. / SAMPLE</th>
+                    <th>접수일</th>
+                    <th>고객사</th>
+                    <th>PART ID</th>
+                    <th>제품 / 용량</th>
+                    <th>처리 상태</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="records-body">
+                  <tr>
+                    <td colspan="7" class="table-empty">
+                      동기화를 실행하면 변환한 데이터가 여기에 표시됩니다.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="table-footer">
+              <span id="record-page-label">0개 항목</span>
+              <div class="inline-buttons">
+                <button id="prev-page" class="button small secondary" disabled>
+                  이전</button
+                ><button id="next-page" class="button small secondary" disabled>
+                  다음
+                </button>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-history" class="view" hidden>
+          <div class="card">
+            <div class="card-heading">
+              <h2>최근 실행 이력</h2>
+              <span class="muted"
+                >최근 30개 · 이력은 재시작 후에도 유지됩니다</span
+              >
+            </div>
+            <div id="history-list" class="history-list"></div>
+          </div>
+        </section>
+        <section id="view-schedule" class="view" hidden>
+          <div class="schedule-layout">
+            <div class="card padded">
+              <div class="card-heading">
+                <h2>자동 갱신 설정</h2>
+                <span class="pill neutral" id="schedule-status">비활성</span>
+              </div>
+              <form id="schedule-form">
+                <label class="toggle-row"
+                  ><div>
+                    <strong>자동 갱신 사용</strong>
+                    <p>설정한 간격마다 동기화를 실행합니다.</p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    id="schedule-enabled"
+                    role="switch" /></label
+                ><label for="interval">실행 간격</label>
+                <div class="input-unit">
+                  <input
+                    type="number"
+                    id="interval"
+                    min="1"
+                    max="525600"
+                    value="60"
+                    required
+                  /><span>분마다</span>
+                </div>
+                <div class="range-summary" id="schedule-form-summary"></div>
+                <p class="help">
+                  대시보드의 현재 기간·조회 단위·실행 방식을 함께 저장합니다.
+                </p>
+                <button type="button" id="back-to-config" class="text-button">
+                  동기화 설정 변경 →</button
+                ><button type="submit" class="button primary full">
+                  스케줄 저장
+                </button>
+              </form>
+            </div>
+            <div class="card padded">
+              <div class="eyebrow">ALWAYS UP TO DATE</div>
+              <h2>웹을 닫아도 계속되는 갱신</h2>
+              <p class="body-copy">
+                실행기 프로세스가 켜져 있으면 브라우저를 닫아도 예약은 계속
+                동작합니다. Ubuntu에서는 전용 서비스를 등록해 서버 재시작 후에도
+                자동으로 실행할 수 있습니다.
+              </p>
+              <div class="detail-item">
+                <span>현재 저장된 스케줄</span
+                ><strong id="saved-schedule">설정 없음</strong>
+              </div>
+              <div class="detail-item">
+                <span>다음 실행 시각</span><strong id="saved-next">—</strong>
+              </div>
+              <div class="detail-item">
+                <span>시간대</span
+                ><strong id="schedule-timezone">Asia/Seoul</strong>
+              </div>
+              <div class="soft-note">
+                최근 N개월은 매번 실행할 때 계산합니다. 직접 지정한 기간은
+                고정됩니다. 실행이 오래 걸리면 중복 실행을 건너뛰고 끝난 뒤 한
+                번 실행합니다.
+              </div>
+            </div>
+          </div>
+        </section>
+        <section id="view-connections" class="view" hidden>
+          <div class="card">
+            <div class="card-heading">
+              <h2>API 연결 설정</h2>
+              <span class="pill neutral">.env에서 변경</span>
+            </div>
+            <div id="endpoints-list" class="endpoint-list"></div>
+            <div class="soft-note">
+              주소·인증 헤더·응답 경로는 .env에서 변경한 뒤 실행기를
+              재시작하세요. 연결 확인은 조회 API만 호출합니다.
+            </div>
+            <div id="check-results" class="padded" aria-live="polite"></div>
+          </div>
+          <div class="card mapping-card">
+            <div class="card-heading">
+              <h2>필드 매핑</h2>
+              <span class="muted">전송 형식: {"values": { … }}</span>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>전송 필드</th>
+                    <th>원본</th>
+                    <th>변환 규칙</th>
+                  </tr>
+                </thead>
+                <tbody id="mapping-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+        <section id="view-attention" class="view" hidden>
+          <div class="notice warning">
+            <div>
+              <strong>서버에서 반영 여부를 먼저 확인하세요.</strong>
+              <p>
+                전송 응답이 유실되면 이미 저장되었을 수 있습니다. 업무 키와 전송
+                값을 대조한 뒤 결과를 기록하세요. 이 화면의 확인 처리는 데이터를
+                전송하지 않습니다.
+              </p>
+            </div>
+          </div>
+          <div id="unresolved-list"></div>
+        </section>
+        <footer>
+          Claim Sync <span>·</span> 데이터 운영을 위한 동기화 워크스페이스
+          <span id="last-updated">연결 중</span>
+        </footer>
+      </main>
+    </div>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <dialog id="payload-dialog">
+      <div class="dialog-heading">
+        <div>
+          <span class="eyebrow">REQUEST PREVIEW</span>
+          <h2>전송 데이터</h2>
+        </div>
+        <button
+          class="icon-button"
+          data-close="payload-dialog"
+          aria-label="닫기"
+        >
+          ×
+        </button>
+      </div>
+      <div id="payload-error" class="notice danger compact" hidden></div>
+      <pre id="payload-code"></pre>
+      <div class="dialog-footer">
+        <button class="button secondary" id="copy-payload">JSON 복사</button
+        ><button class="button primary" data-close="payload-dialog">
+          확인
+        </button>
+      </div>
+    </dialog>
+    <dialog id="auth-dialog">
+      <form id="auth-form">
+        <div class="dialog-heading"><h2>워크스페이스 접속</h2></div>
+        <p>.env에 설정한 접속 토큰을 입력하세요.</p>
+        <label for="access-token">접속 토큰</label
+        ><input
+          id="access-token"
+          type="password"
+          autocomplete="current-password"
+          required
+        /><button class="button primary full" type="submit">연결</button>
+      </form>
+    </dialog>
+    <dialog id="resolve-dialog">
+      <form id="resolve-form">
+        <div class="dialog-heading">
+          <h2>전송 결과 확인</h2>
+          <button
+            type="button"
+            class="icon-button"
+            data-close="resolve-dialog"
+            aria-label="닫기"
+          >
+            ×
+          </button>
+        </div>
+        <p id="resolve-key" class="mono"></p>
+        <label for="resolve-result">운영 서버 대조 결과</label
+        ><select id="resolve-result">
+          <option value="">확인 결과를 선택하세요</option>
+          <option value="applied">전송한 값이 모두 반영됨</option>
+          <option value="not_applied">전송한 값이 반영되지 않음</option></select
+        ><label for="resolve-note">확인 근거</label
+        ><textarea
+          id="resolve-note"
+          minlength="5"
+          maxlength="1000"
+          required
+          placeholder="확인한 데이터와 근거를 5자 이상 기록하세요."
+        ></textarea>
+        <p class="help">
+          미반영으로 기록하면 다음 동기화 때 다시 전송할 수 있습니다.
+        </p>
+        <button class="button primary full" type="submit">
+          확인 결과 저장
+        </button>
+      </form>
+    </dialog>
+  </body>
+</html>

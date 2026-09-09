@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "interval_minutes": 60,
+  "run": {
+    "period_mode": "relative",
+    "months": 2,
+    "chunk_days": 7,
+    "dry_run": true
+  }
+}

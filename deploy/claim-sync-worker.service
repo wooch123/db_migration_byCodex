@@ -1,0 +1,29 @@
+[Unit]
+Description=Claim Sync background scheduler and worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=claimsync
+Group=claimsync
+WorkingDirectory=/opt/claim-sync
+Environment=PYTHONUNBUFFERED=1
+Environment=DATA_DIR=/var/lib/claim-sync
+ExecStart=/opt/claim-sync/.venv/bin/claim-sync --env-file /etc/claim-sync/claim-sync.env worker
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+StateDirectory=claim-sync
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/claim-sync
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,298 @@
+import asyncio
+import json
+import secrets
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Literal
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+from .clients import APIClients, UpstreamError
+from .config import Settings
+from .models import RunSpec, ScheduleSpec
+from .runner import Runner
+from .store import Store, encode, utcnow
+
+
+class Resolution(BaseModel):
+    record_key: str
+    destination: str
+    result: Literal["applied", "not_applied"]
+    note: str = Field(min_length=5, max_length=1000)
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or Settings()
+    store = Store(settings.data_dir)
+    runner = Runner(settings, store)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        task = asyncio.create_task(runner.serve()) if settings.enable_runner else None
+        yield
+        if task:
+            await runner.stop(task)
+
+    app = FastAPI(
+        title="Claim Sync",
+        version="1.0.0",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url="/api/openapi.json",
+    )
+    app.state.store, app.state.settings, app.state.runner = store, settings, runner
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
+    static = Path(__file__).parent / "static"
+    app.mount("/static", StaticFiles(directory=static), name="static")
+
+    @app.middleware("http")
+    async def guard(request: Request, call_next):
+        if request.url.path.startswith("/api/"):
+            if settings.app_access_token:
+                token = request.headers.get("Authorization", "").removeprefix("Bearer ")
+                if not secrets.compare_digest(token, settings.app_access_token):
+                    return JSONResponse({"detail": "접속 토큰이 필요합니다."}, status_code=401)
+            if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                origin = request.headers.get("origin")
+                expected = f"{request.url.scheme}://{request.url.netloc}"
+                if (origin and origin != expected) or request.headers.get("sec-fetch-site") == "cross-site":
+                    return JSONResponse(
+                        {"detail": "외부 사이트의 요청은 허용하지 않습니다."}, status_code=403
+                    )
+                if "application/json" not in request.headers.get("content-type", ""):
+                    return JSONResponse({"detail": "application/json 요청이 필요합니다."}, status_code=415)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        )
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/")
+    def index():
+        return FileResponse(static / "index.html")
+
+    @app.get("/healthz")
+    def health():
+        return {"status": "ok"}
+
+    def require_job(job_id):
+        job = store.job(job_id)
+        if not job:
+            raise HTTPException(404, "작업을 찾을 수 없습니다.")
+        return job
+
+    def validate_write(spec):
+        if not spec.dry_run and not settings.can_write:
+            raise HTTPException(409, "실제 전송이 잠겨 있습니다. .env에서 운영 전송 조건을 확인하세요.")
+
+    @app.get("/api/state")
+    def state():
+        jobs = store.query("SELECT * FROM jobs ORDER BY created_at DESC LIMIT 30")
+        for job in jobs:
+            job["spec"] = json.loads(job["spec"])
+        pulse = store.get_setting("runner", {})
+        heartbeat = pulse.get("heartbeat")
+        alive = bool(
+            heartbeat and (datetime.now(UTC) - datetime.fromisoformat(heartbeat)).total_seconds() < 15
+        )
+        return {
+            "mode": settings.app_mode,
+            "can_write": settings.can_write,
+            "timezone": settings.timezone,
+            "limit": settings.claims_limit,
+            "destination": settings.destination,
+            "runner_alive": alive,
+            "runner": pulse,
+            "jobs": jobs,
+            "schedule": store.schedule(),
+            "endpoints": {
+                "claims": settings.claims_base_url.rstrip("/") + settings.claims_path,
+                "schema": settings.product_base_url.rstrip("/") + settings.product_schema_path,
+                "product": settings.product_base_url.rstrip("/") + settings.product_record_path,
+                "target": settings.target_url,
+            },
+            "key_fields": settings.target_key_fields,
+            "unresolved": store.one(
+                "SELECT COUNT(*) n FROM deliveries WHERE status IN ('uncertain','sending')"
+            )["n"],
+            "mock_target_count": store.one("SELECT COUNT(*) n FROM mock_target")["n"]
+            if settings.app_mode == "mock"
+            else None,
+            "mock_scenario": settings.mock_scenario if settings.app_mode == "mock" else None,
+        }
+
+    @app.post("/api/jobs", status_code=202)
+    def create_job(spec: RunSpec):
+        validate_write(spec)
+        if store.one("SELECT COUNT(*) n FROM jobs WHERE status='queued'")["n"] >= 20:
+            raise HTTPException(409, "대기 작업이 20개입니다. 기존 작업을 처리하거나 취소하세요.")
+        return {"id": store.enqueue(spec, settings.destination)}
+
+    @app.post("/api/preview")
+    def preview(spec: RunSpec):
+        start, end = spec.resolve(settings.timezone)
+        days = (end - start).days + 1
+        return {
+            "start_date": str(start),
+            "end_date": str(end),
+            "days": days,
+            "chunks": (days + spec.chunk_days - 1) // spec.chunk_days,
+            "timezone": settings.timezone,
+        }
+
+    @app.get("/api/jobs/{job_id}")
+    def job_detail(job_id: str, after_event: int = Query(0, ge=0)):
+        job = require_job(job_id)
+        job["chunks"] = store.query(
+            "SELECT * FROM chunks WHERE job_id=? ORDER BY id DESC LIMIT 400", (job_id,)
+        )[::-1]
+        job["chunk_count"] = store.one("SELECT COUNT(*) n FROM chunks WHERE job_id=?", (job_id,))["n"]
+        job["chunk_summary"] = store.one(
+            """SELECT COUNT(CASE WHEN status='failed' THEN 1 END) failures,
+            COALESCE(SUM(CASE WHEN status IN ('completed','partial','failed')
+            THEN julianday(end_date)-julianday(start_date)+1 ELSE 0 END),0) finished_days
+            FROM chunks WHERE job_id=?""",
+            (job_id,),
+        )
+        job["events"] = store.query(
+            "SELECT * FROM events WHERE job_id=? AND id>? ORDER BY id DESC LIMIT 500", (job_id, after_event)
+        )[::-1]
+        return job
+
+    @app.get("/api/jobs/{job_id}/records")
+    def records(
+        job_id: str, offset: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100), status: str = ""
+    ):
+        require_job(job_id)
+        clause = "job_id=?" + (" AND status=?" if status else "")
+        params = (job_id, status) if status else (job_id,)
+        rows = store.query(
+            f"SELECT * FROM records WHERE {clause} ORDER BY id LIMIT ? OFFSET ?", (*params, limit, offset)
+        )
+        for row in rows:
+            row["payload"] = json.loads(row["payload"]) if row["payload"] else None
+        return {
+            "items": rows,
+            "total": store.one(f"SELECT COUNT(*) n FROM records WHERE {clause}", params)["n"],
+        }
+
+    @app.get("/api/jobs/{job_id}/export")
+    def export(job_id: str):
+        require_job(job_id)
+
+        def lines():
+            with store.connect() as db:
+                for row in db.execute(
+                    "SELECT record_key,status,payload,error FROM records WHERE job_id=? ORDER BY id",
+                    (job_id,),
+                ):
+                    item = dict(row)
+                    item["request"] = {"values": json.loads(item.pop("payload"))} if item["payload"] else None
+                    item.pop("payload", None)
+                    yield encode(item) + "\n"
+
+        return StreamingResponse(
+            lines(),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="claim-sync-{job_id}.ndjson"'},
+        )
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel(job_id: str):
+        job = require_job(job_id)
+        if job["status"] not in {"queued", "running"}:
+            raise HTTPException(409, "이미 종료된 작업입니다.")
+        store.update_job(job_id, cancel_requested=1)
+        return {"ok": True}
+
+    @app.post("/api/jobs/{job_id}/retry", status_code=202)
+    def retry(job_id: str):
+        job = require_job(job_id)
+        if job["status"] in {"running", "queued"}:
+            raise HTTPException(409, "실행 중인 작업은 다시 실행할 수 없습니다.")
+        if job["destination"] != settings.destination:
+            raise HTTPException(409, "전송 대상이 변경되었습니다. 작업을 새로 등록하세요.")
+        spec = RunSpec.model_validate(job["spec"])
+        validate_write(spec)
+        return {"id": store.enqueue(spec, settings.destination, source="retry")}
+
+    @app.put("/api/schedule")
+    def save_schedule(spec: ScheduleSpec):
+        if spec.enabled:
+            validate_write(spec.run)
+        return store.save_schedule(spec, settings.destination)
+
+    @app.post("/api/check")
+    async def check():
+        result = {}
+        async with APIClients(settings, store, lambda *_: None) as api:
+            for label, action in (("product_schema", api.schema),):
+                try:
+                    await action()
+                    result[label] = {"ok": True, "message": "필수 8개 필드 확인"}
+                except UpstreamError as exc:
+                    result[label] = {"ok": False, "message": str(exc)}
+            start, end = RunSpec(months=1).resolve(settings.timezone)
+            try:
+                rows, truncated = await api.claims(end, end)
+                result["claims"] = {
+                    "ok": True,
+                    "message": f"오늘 접수 {len(rows)}건 조회"
+                    + (" · 한도 확인 필요" if truncated or len(rows) >= settings.claims_limit else ""),
+                }
+            except UpstreamError as exc:
+                result["claims"] = {"ok": False, "message": str(exc)}
+        result["target"] = {"ok": None, "message": "전송 API는 검증 실행 또는 API 전송으로 확인합니다."}
+        return result
+
+    @app.get("/api/deliveries/unresolved")
+    def unresolved():
+        rows = store.query(
+            "SELECT * FROM deliveries WHERE status IN ('uncertain','sending') ORDER BY updated_at DESC LIMIT 100"
+        )
+        for row in rows:
+            row["payload"] = json.loads(row["payload"])
+        return rows
+
+    @app.post("/api/deliveries/resolve")
+    def resolve(body: Resolution):
+        with store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            delivery = db.execute(
+                "SELECT * FROM deliveries WHERE destination=? AND record_key=?",
+                (body.destination, body.record_key),
+            ).fetchone()
+            if not delivery or delivery["status"] != "uncertain":
+                raise HTTPException(409, "확인 대기 상태의 항목만 처리할 수 있습니다.")
+            active = db.execute(
+                "SELECT 1 FROM jobs WHERE id=? AND status='running'", (delivery["job_id"],)
+            ).fetchone()
+            if active:
+                raise HTTPException(409, "해당 작업이 종료된 후 확인 처리하세요.")
+            db.execute(
+                "UPDATE deliveries SET status=?,note=?,updated_at=? WHERE destination=? AND record_key=?",
+                (
+                    "success" if body.result == "applied" else "failed",
+                    body.note,
+                    utcnow(),
+                    body.destination,
+                    body.record_key,
+                ),
+            )
+        store.event(
+            delivery["job_id"], "warning", "reconcile", f"운영자 반영 확인: {body.result} · {body.note}"
+        )
+        return {"ok": True}
+
+    return app
