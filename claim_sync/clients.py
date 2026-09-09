@@ -6,6 +6,7 @@ from urllib.parse import quote
 import httpx
 
 from .config import Settings
+from .diagnostics import RequestDiagnostics, error_body
 from .mapping import PRODUCT_FIELDS
 
 
@@ -109,6 +110,9 @@ class APIClients:
     def __init__(self, settings: Settings, store, event, transport=None):
         self.settings = settings
         self.event = event
+        self.diagnostics = RequestDiagnostics(
+            settings.claims_headers, settings.product_headers, settings.target_headers
+        )
         if transport is None and settings.app_mode == "mock":
             from .mock import create_mock_app
 
@@ -133,34 +137,59 @@ class APIClients:
         await self.client.aclose()
 
     async def get(self, label: str, url: str, headers: dict, params=None):
+        request = self.client.build_request("GET", url, headers=headers, params=params)
         for attempt in range(self.settings.get_retries + 1):
             try:
                 async with self.client.stream("GET", url, headers=headers, params=params) as response:
-                    if response.status_code in {408, 429, 500, 502, 503, 504}:
-                        raise httpx.HTTPStatusError("retryable", request=response.request, response=response)
+                    request = response.request
                     if not 200 <= response.status_code < 300:
-                        raise UpstreamError(f"{label}: HTTP {response.status_code}")
+                        message = self.diagnostics.message(
+                            label,
+                            request,
+                            f"HTTP {response.status_code}",
+                            response=response,
+                            body=await error_body(response),
+                        )
+                    if response.status_code in {408, 429, 500, 502, 503, 504}:
+                        raise httpx.HTTPStatusError(message, request=request, response=response)
+                    if not 200 <= response.status_code < 300:
+                        raise UpstreamError(message)
                     data = bytearray()
                     async for chunk in response.aiter_bytes():
                         data.extend(chunk)
                         if len(data) > self.settings.max_response_bytes:
                             raise OversizedResponse(
-                                f"{label}: 응답 크기가 MAX_RESPONSE_BYTES를 초과했습니다."
+                                self.diagnostics.message(
+                                    label,
+                                    request,
+                                    "응답 크기가 MAX_RESPONSE_BYTES를 초과했습니다.",
+                                    response=response,
+                                )
                             )
                     try:
                         return json.loads(data)
                     except (ValueError, UnicodeError) as exc:
-                        raise UpstreamError(f"{label}: 유효한 JSON 응답이 아닙니다.") from exc
+                        raise UpstreamError(
+                            self.diagnostics.message(
+                                label,
+                                request,
+                                "유효한 JSON 응답이 아닙니다.",
+                                response=response,
+                                body=data.decode("utf-8", errors="replace"),
+                            )
+                        ) from exc
             except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                message = (
+                    str(exc)
+                    if isinstance(exc, httpx.HTTPStatusError)
+                    else self.diagnostics.message(label, request, f"{type(exc).__name__}: {exc}")
+                )
                 if attempt == self.settings.get_retries:
-                    detail = (
-                        f"HTTP {exc.response.status_code}"
-                        if isinstance(exc, httpx.HTTPStatusError)
-                        else type(exc).__name__
-                    )
-                    raise UpstreamError(f"{label}: {detail}, 조회 재시도 소진") from exc
+                    raise UpstreamError(f"{message}\n조회 재시도 소진 (총 {attempt + 1}회 요청)") from exc
                 self.event(
-                    "warning", "retry", f"{label} 조회 재시도 {attempt + 1}/{self.settings.get_retries}"
+                    "warning",
+                    "retry",
+                    f"{message}\n조회 재시도 {attempt + 1}/{self.settings.get_retries}",
                 )
                 delay = min(30, self.settings.retry_backoff_seconds * 2**attempt)
                 if isinstance(exc, httpx.HTTPStatusError):
@@ -204,38 +233,74 @@ class APIClients:
         headers = dict(s.target_headers)
         if s.target_idempotency_header:
             headers[s.target_idempotency_header] = fingerprint
+        request = self.client.build_request("POST", s.target_url, headers=headers)
         try:
             # POST is never retried automatically: a lost response may follow a committed write.
             async with self.client.stream(
                 "POST", s.target_url, headers=headers, json={"values": values}
             ) as response:
+                request = response.request
                 if response.status_code >= 500 or response.status_code in {202, 408, 429}:
                     raise AmbiguousDelivery(
-                        f"전송 HTTP {response.status_code}: 수신 여부를 운영 서버에서 확인하세요."
+                        self.diagnostics.message(
+                            "전송",
+                            request,
+                            "수신 여부를 운영 서버에서 확인하세요. 자동 재전송 보류.",
+                            response=response,
+                            body=await error_body(response),
+                        )
                     )
                 if not 200 <= response.status_code < 300:
-                    raise UpstreamError(f"전송 거절: HTTP {response.status_code}")
+                    raise UpstreamError(
+                        self.diagnostics.message(
+                            "전송 거절",
+                            request,
+                            f"HTTP {response.status_code}",
+                            response=response,
+                            body=await error_body(response),
+                        )
+                    )
+
+                def uncertain(detail, body=None):
+                    return AmbiguousDelivery(
+                        self.diagnostics.message(
+                            "전송",
+                            request,
+                            detail,
+                            response=response,
+                            body=body,
+                        )
+                    )
+
                 data = bytearray()
                 async for chunk in response.aiter_bytes():
                     data.extend(chunk)
                     if len(data) > s.max_response_bytes:
-                        raise AmbiguousDelivery("전송 응답 크기 초과: 수신 여부 확인 필요")
+                        raise uncertain("전송 응답 크기 초과: 수신 여부 확인 필요")
                 if not data:
                     if s.target_success_path:
-                        raise AmbiguousDelivery("전송 확인 응답이 비어 있습니다.")
+                        raise uncertain("전송 확인 응답이 비어 있습니다.", "")
                     return
                 try:
                     body = json.loads(data)
                 except (ValueError, UnicodeError) as exc:
-                    raise AmbiguousDelivery("전송 후 JSON 확인 응답을 해석할 수 없습니다.") from exc
+                    raise uncertain(
+                        "전송 후 JSON 확인 응답을 해석할 수 없습니다.", data.decode("utf-8", errors="replace")
+                    ) from exc
                 if isinstance(body, dict) and (body.get("success") is False or body.get("error")):
-                    raise AmbiguousDelivery("전송 응답에 애플리케이션 오류가 있습니다. 반영 여부 확인 필요")
+                    raise uncertain(
+                        "전송 응답에 애플리케이션 오류가 있습니다. 반영 여부 확인 필요", json.dumps(body)
+                    )
                 if s.target_success_path:
                     try:
                         accepted = at_path(body, s.target_success_path) == json.loads(s.target_success_value)
                     except (UpstreamError, ValueError):
                         accepted = False
                     if not accepted:
-                        raise AmbiguousDelivery("전송 성공 확인 조건이 일치하지 않습니다.")
+                        raise uncertain("전송 성공 확인 조건이 일치하지 않습니다.", json.dumps(body))
         except httpx.TransportError as exc:
-            raise AmbiguousDelivery(f"전송 {type(exc).__name__}: 자동 재전송을 보류했습니다.") from exc
+            raise AmbiguousDelivery(
+                self.diagnostics.message(
+                    "전송", request, f"{type(exc).__name__}: {exc}\n자동 재전송을 보류했습니다."
+                )
+            ) from exc

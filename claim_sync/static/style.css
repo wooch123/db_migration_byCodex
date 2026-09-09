@@ -868,9 +868,26 @@ progress::-moz-progress-bar {
 .event .event-message {
   color: #74806e;
   overflow-wrap: anywhere;
+  min-width: 0;
+  white-space: pre-wrap;
 }
 .event.error .event-message {
   color: #ae6256;
+}
+.event.error .event-message,
+.event.warning .event-message {
+  font-size: 11px;
+}
+#job-error,
+#payload-error,
+#check-results .detail-item > strong,
+.attention-card p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#check-results .detail-item > strong {
+  text-align: left;
+  min-width: 0;
 }
 .records-card .card-heading {
   padding: 19px 22px;

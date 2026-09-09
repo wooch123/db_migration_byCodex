@@ -228,12 +228,42 @@ sudo -u claimsync /opt/claim-sync/.venv/bin/python -c \
 
 ## 문제 해결
 
+### HTTP 오류 상세 확인
+
+웹의 **실행 이력 → 해당 실행 → 처리 로그**에서 `오류만`을 선택하면 실패한 요청과 재시도 원인을 확인할 수 있습니다. 개별 레코드의 상세 화면과 전송 JSON 내보내기에도 해당 오류가 포함됩니다. **API 연결 및 매핑 → 연결 확인** 결과에도 같은 형식으로 표시합니다.
+
+HTTP 오류에는 아래 정보가 저장됩니다.
+
+- 실패 단계, GET/POST 방식, **실제로 요청한 전체 URL**. Claim 조회의 `rcvDataFrom`, `rcvDateTo`, `limit`와 제품 조회의 인코딩된 part ID 경로를 포함합니다.
+- HTTP 상태 코드와 상태 설명, 응답 Content-Type.
+- 서버가 제공한 `x-request-id`, `x-correlation-id`, `traceparent`. API 담당자가 서버 로그와 대조할 때 사용할 수 있습니다.
+- 서버 응답 본문. JSON은 읽기 쉽게 표시하고 HTML·일반 텍스트 오류도 보존합니다. 오류 응답은 최대 8 KiB를 읽고, 마스킹 후 최대 4,096자까지 기록하며 초과분은 `[응답 일부 생략]`으로 표시합니다.
+- 연결 실패·시간 초과의 예외 종류와 원인, GET 재시도 횟수. POST의 자동 재전송 보류 여부도 표시합니다.
+
+예시:
+
+```text
+Claim: HTTP 400
+요청: GET http://12.81.220.37:8080/api/searchFlashClaims?rcvDataFrom=2025-01-01&rcvDateTo=2025-01-31&limit=1000
+상태: HTTP 400 Bad Request
+content-type: application/json
+서버 응답:
+{
+  "detail": "Invalid date range"
+}
+```
+
+요청 헤더 전체와 전송 데이터 전체는 오류 메시지에 추가하지 않습니다. 설정한 인증 헤더 값이 응답에 그대로 되돌아오면 가리며, 토큰·비밀번호·쿠키·API key 항목과 URL 인증 정보도 `[REDACTED]`로 표시합니다. 일반 업무 필드와 서버 메시지는 원인 파악을 위해 남깁니다.
+
+작업 오류는 `DATA_DIR/claim-sync.sqlite3`의 `events`, `chunks.error`, `records.error` 등에 저장되므로 웹을 종료해도 보존되고 Ubuntu worker에도 동일하게 적용됩니다. 이전 버전이 상태 코드만 저장했던 과거 오류의 URL·응답은 복원되지 않습니다. 업데이트 후 다시 실행해 새 오류를 확인하세요.
+
 | 상황 | 조치 |
 | --- | --- |
 | 실행기 연결 대기 | worker 프로세스, DATA_DIR, 파일 권한, heartbeat 확인 |
 | schema 해석 실패 | 실제 schema 형태와 필수 필드 대조. 지원 형태가 아니면 `clients.py` 어댑터 확장 필요 |
 | Claim/제품 JSON 경로 오류 | `.env`의 응답 경로 설정 변경 |
 | 하루치 limit 도달 | API 담당자에게 pagination/시각 단위/더 높은 검증된 한도 요청 |
+| HTTP 400/422 | 오류의 요청 URL·조회 조건과 서버 응답의 필드 오류 확인. 전송 오류는 해당 레코드의 전송 JSON과 비교 |
 | HTTP 401/403 | 각 API의 인증 헤더와 계정 권한 확인 |
 | 인증서 오류 | 사내 CA bundle 경로와 신뢰 체인 확인 |
 | 확인 대기 | 대상 DB에서 업무 키와 모든 전송 값을 대조하고 웹에서 결과 기록 |
