@@ -1,5 +1,51 @@
 # 운영 가이드
 
+## 자동 실행 파일 설정
+
+웹 검증은 Windows의 `run.bat`, Linux의 `./run.sh`로 시작할 수 있습니다. 기본 모드는 `web`이며 `worker`, `run`, `schedule` 등 기존 CLI 명령과 인자는 그대로 전달합니다. `--setup-only`는 설치만 수행하고 종료합니다. 두 실행 파일은 프로젝트 폴더로 이동하므로 다른 폴더에서 실행해도 설정과 데이터 경로가 일관됩니다.
+
+실행 시 패키지 버전, 설치 기록과 의존성 충돌을 확인합니다. 정상 설치된 환경은 다운로드 없이 재사용합니다. 설치에 실패하면 앱을 실행하지 않고 오류를 표시하므로 원인을 해결한 뒤 같은 파일을 다시 실행하면 됩니다. 초기 설치 파일 잠금으로 여러 실행 파일이 동시에 같은 환경에 패키지를 설치하지 않도록 처리합니다. 앱을 실행 중인 상태에서 의존성 버전 변경이 필요한 업데이트는 앱을 먼저 종료한 뒤 진행하세요.
+
+| 환경변수 | 의미 |
+| --- | --- |
+| `CLAIM_SYNC_PYTHON` | 초기 준비에 사용할 Python 실행 파일의 경로. 공백이 있어도 지원하며 기존 정상 `.venv`는 유지 |
+| `CLAIM_SYNC_WHEELHOUSE` | 패키지를 받을 로컬 wheel 폴더. 지정하면 `--no-index`로 인터넷 조회를 차단 |
+| `CLAIM_SYNC_NO_SYSTEM_INSTALL=1` | Python/venv가 없을 때 winget·apt 자동 설치를 하지 않고 종료 |
+| `CLAIM_SYNC_NO_PAUSE=1` | Windows에서 인자 없는 실행 실패 시 키 입력 대기를 생략 |
+
+이 변수는 `.env`를 읽기 전 설치 단계에서 사용하므로 **실행할 터미널의 환경변수로 지정**합니다.
+
+```powershell
+$env:CLAIM_SYNC_PYTHON = 'C:\Program Files\Python312\python.exe'
+.\run.bat --setup-only
+```
+
+```bash
+CLAIM_SYNC_PYTHON=/usr/bin/python3.12 ./run.sh --setup-only
+```
+
+Python 자동 설치는 Windows의 winget(`Python.Python.3.12`, 사용자 범위)과 Ubuntu/Debian의 apt를 지원합니다. Ubuntu/Debian에서 venv/ensurepip 모듈이 누락되면 선택한 Python 버전에 맞는 `python3.x-venv` 설치도 시도합니다. sudo 암호를 물어볼 수 있습니다. 별도 PPA 추가나 시스템 Python 교체는 하지 않으므로 기본 저장소가 Python 3.10 이하인 배포판은 3.11 이상의 Python을 별도로 준비하세요. 다른 Linux 배포판에서도 Python과 venv가 이미 있으면 Python 패키지 자동 설치는 그대로 동작합니다.
+
+폐쇄망에서는 동일한 운영체제·Python 버전·CPU의 인터넷 연결 환경에서 런타임뿐 아니라 설치용 build 도구도 준비합니다.
+
+```bash
+python -m pip wheel -r requirements.lock --wheel-dir wheelhouse
+python -m pip wheel 'setuptools>=77' wheel --wheel-dir wheelhouse
+```
+
+프로젝트와 wheelhouse를 반입한 후 실행합니다. 운영체제의 Python/venv 패키지는 사내 배포판 저장소 또는 별도 설치 매체로 준비해야 합니다.
+
+```bash
+CLAIM_SYNC_WHEELHOUSE=/path/to/wheelhouse ./run.sh
+```
+
+```powershell
+$env:CLAIM_SYNC_WHEELHOUSE = 'D:\wheelhouse'
+.\run.bat
+```
+
+사내 PyPI mirror와 프록시는 pip 표준 설정(`PIP_INDEX_URL`, `HTTPS_PROXY` 등)을 사용할 수 있습니다. 인증 정보를 Git에 저장하지 마세요. `.env`는 없을 때만 예제를 복사하며 설치 재시도·재실행 시 원래 파일을 덮어쓰지 않습니다.
+
 ## Ubuntu systemd 설치
 
 아래 예시는 프로젝트 `/opt/claim-sync`, 설정 `/etc/claim-sync/claim-sync.env`, 데이터 `/var/lib/claim-sync` 기준입니다. Python 3.11 이상이 필요합니다. Ubuntu 24.04의 Python 3.12를 권장 기준으로 삼되 실제 사내 배포 환경에서 검증하세요.

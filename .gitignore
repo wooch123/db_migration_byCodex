@@ -13,3 +13,5 @@ dist/
 artifacts/
 *.log
 node_modules/
+.claim-sync-setup.lock
+wheelhouse/

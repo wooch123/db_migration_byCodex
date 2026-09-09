@@ -23,3 +23,38 @@ jobs:
       - run: ruff format --check .
       - run: pytest -q
       - run: python -m pip wheel --no-deps . --wheel-dir dist
+  launchers:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install from a clean environment (Linux)
+        if: runner.os == 'Linux'
+        run: ./run.sh --setup-only
+        env:
+          CLAIM_SYNC_NO_SYSTEM_INSTALL: "1"
+      - name: Reuse installed packages without network (Linux)
+        if: runner.os == 'Linux'
+        run: ./run.sh --help
+        env:
+          PIP_NO_INDEX: "1"
+      - name: Install from a clean environment (Windows)
+        if: runner.os == 'Windows'
+        run: .\run.bat --setup-only
+        env:
+          CLAIM_SYNC_NO_SYSTEM_INSTALL: "1"
+      - name: Reuse installed packages without network (Windows)
+        if: runner.os == 'Windows'
+        run: .\run.bat --help
+        env:
+          PIP_NO_INDEX: "1"
+      - name: Validate Windows launcher arguments and setup handling
+        if: runner.os == 'Windows'
+        run: |
+          .\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
+          .\.venv\Scripts\python.exe -m pytest -q tests/test_bootstrap.py

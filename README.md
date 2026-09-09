@@ -9,23 +9,33 @@ Claim 접수 이력을 날짜별로 수집하고 제품 정보를 보강해 FAR 
 ### Ubuntu / Linux
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.lock
-pip install --no-deps -e .
-cp .env.example .env
-claim-sync web
+chmod +x run.sh
+./run.sh
 ```
 
-### Windows PowerShell
+### Windows
+
+프로젝트 폴더의 **`run.bat`를 더블클릭**하거나 PowerShell에서 실행합니다.
 
 ```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.lock
-.\.venv\Scripts\python.exe -m pip install --no-deps -e .
-Copy-Item .env.example .env
-.\.venv\Scripts\claim-sync.exe web
+.\run.bat
 ```
+
+실행 파일은 `.venv` 생성 → 필요한 패키지 설치 → 프로젝트 설치 → `.env` 초기 생성 → 웹 실행을 자동으로 처리합니다. 기존 `.env`와 데이터는 보존하며, 이미 설치한 패키지는 버전을 확인한 뒤 재사용합니다. 패키지가 제거되었거나 lock 파일의 버전과 다르면 해당 패키지를 다시 설치합니다.
+
+Python 3.11 이상이 없으면 Windows는 **winget으로 Python 3.12 설치**, Ubuntu/Debian은 **apt로 Python과 venv 설치**를 시도합니다. 시스템 설치 시 관리자 권한이나 sudo 암호가 필요할 수 있습니다. 패키지 저장소에서 Python 3.11 이상을 제공하지 않는 배포판이나 winget이 없는 Windows는 Python을 먼저 설치해야 합니다. Python 패키지는 운영체제 전역이 아닌 프로젝트의 `.venv`에 설치합니다.
+
+| 용도 | Windows | Linux |
+| --- | --- | --- |
+| 웹 화면 실행 | `run.bat` | `./run.sh` |
+| 설치·환경 준비만 수행 | `run.bat --setup-only` | `./run.sh --setup-only` |
+| 백그라운드 실행기 | `run.bat worker` | `./run.sh worker` |
+| 최근 두 달 검증 | `run.bat run --months 2 --chunk-days 7` | `./run.sh run --months 2 --chunk-days 7` |
+| 별도 환경 파일 | `run.bat --env-file "settings/test.env" web` | `./run.sh --env-file "settings/test.env" web` |
+
+`worker`는 터미널에서 계속 실행됩니다. Ubuntu 로그인 종료·재부팅 후에도 유지하려면 [systemd 운영 가이드](docs/operations.md)를 사용하세요. 다른 폴더에서 실행해도 프로젝트 폴더를 기준으로 동작하며, `--env-file` 등 상대 경로 인자도 프로젝트 기준입니다.
+
+초기 설치에는 패키지 다운로드가 필요합니다. 폐쇄망 설치, Python 경로 지정과 설치 오류 조치는 [자동 실행 파일 설정](docs/operations.md#자동-실행-파일-설정)을 참고하세요.
 
 브라우저에서 [http://127.0.0.1:8000](http://127.0.0.1:8000)을 엽니다.
 
@@ -133,6 +143,8 @@ claim_sync/
   static/        외부 의존성 없는 한국어 웹 화면
 tests/           날짜, 변환, HTTP 오류, 전송, 스케줄, 웹 API 테스트
 deploy/          Ubuntu systemd 서비스
+scripts/bootstrap.py  공통 가상환경·의존성 준비 모듈
+run.bat / run.sh      Windows / Linux 자동 설치 및 실행
 ```
 
 ## 개발 검증
