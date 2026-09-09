@@ -71,6 +71,11 @@ def main():
             if args.command == "web":
                 from .web import create_app
 
+                print(
+                    f"[run] API mode: {settings.app_mode.upper()} "
+                    f"({'configured HTTP servers' if settings.app_mode == 'live' else 'in-process test fixtures'}).",
+                    flush=True,
+                )
                 app = create_app(settings)
             else:
                 if host not in {"127.0.0.1", "localhost", "::1"}:

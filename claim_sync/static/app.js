@@ -178,6 +178,16 @@ function showView(view) {
   if (view === "attention")
     loadUnresolved().catch((e) => toast(e.message, true));
 }
+function updateExecutionHint() {
+  const mock = state?.mode === "mock";
+  $("execution-hint").textContent = runSpec().dry_run
+    ? mock
+      ? "가상 API를 조회해 전송할 데이터를 미리 확인합니다."
+      : "실제 Claim·제품 API를 조회해 전송할 데이터를 미리 확인합니다."
+    : mock
+      ? "내장 가상 서버로 전송하여 데이터 갱신을 검증합니다."
+      : "사내 운영 API에 POST 요청을 전송합니다.";
+}
 function renderState() {
   $("env-badge").textContent =
     state.mode === "mock" ? "● MOCK 환경" : "● LIVE 환경";
@@ -185,7 +195,7 @@ function renderState() {
   $("environment-title").textContent =
     state.mode === "mock"
       ? "가상 API 검증 환경에서 실행 중입니다."
-      : "사내 API 연결 환경에서 실행 중입니다.";
+      : "실제 사내 API에서 데이터를 조회합니다.";
   $("environment-description").textContent =
     state.mode === "mock"
       ? `모든 요청은 내장 가상 서버에서 처리됩니다. 가상 대상 DB ${number(state.mock_target_count)}건 · 시나리오: ${state.mock_scenario}`
@@ -198,6 +208,7 @@ function renderState() {
     : "실행기 연결 대기";
   $("execution-mode").querySelector('[value="send"]').disabled =
     !state.can_write;
+  updateExecutionHint();
   $("history-count").textContent = state.jobs.length;
   $("attention-count").textContent = state.unresolved;
   const schedule = state.schedule;
@@ -437,11 +448,7 @@ document.querySelectorAll("[data-period]").forEach((b) =>
 ["months", "start-date", "end-date", "chunk-days", "execution-mode"].forEach(
   (id) =>
     $(id).addEventListener("change", () => {
-      $("execution-hint").textContent = runSpec().dry_run
-        ? "검증 모드는 전송 데이터를 만들고 결과만 저장합니다."
-        : state?.mode === "mock"
-          ? "내장 가상 서버로 전송하여 데이터 갱신을 검증합니다."
-          : "사내 운영 API에 POST 요청을 전송합니다.";
+      updateExecutionHint();
       preview();
     }),
 );

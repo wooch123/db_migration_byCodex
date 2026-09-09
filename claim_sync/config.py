@@ -15,7 +15,7 @@ DEFAULT_TARGET_BASE_URL: Final = "https://estgtask.samsungds.net"
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
-    app_mode: Literal["mock", "live"] = "mock"
+    app_mode: Literal["mock", "live"] = "live"
     data_dir: Path = Path("data")
     timezone: str = "Asia/Seoul"
     enable_runner: bool = True

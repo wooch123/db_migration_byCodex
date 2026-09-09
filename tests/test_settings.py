@@ -29,3 +29,12 @@ def test_dotenv_changes_all_bases_without_code_change(tmp_path):
     assert settings.claims_base_url == "http://source.example"
     assert settings.product_base_url == "http://product.example"
     assert settings.target_url == "https://target.example/new/target"
+
+
+def test_explicit_mock_mode_is_still_available_for_offline_tests(tmp_path, monkeypatch):
+    monkeypatch.delenv("APP_MODE", raising=False)
+    env = tmp_path / "test.env"
+    env.write_text("APP_MODE=mock\n", encoding="utf-8")
+    assert Settings(_env_file=env).app_mode == "mock"
+    monkeypatch.setenv("APP_MODE", "live")
+    assert Settings(_env_file=env).app_mode == "live"

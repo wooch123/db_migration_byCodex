@@ -296,7 +296,7 @@ def create_default_env():
         return
     with os.fdopen(descriptor, "wb") as destination:
         destination.write((ROOT / ".env.example").read_bytes())
-    print("[setup] Created .env from .env.example (mock mode).", flush=True)
+    print("[setup] Created .env from .env.example. API connection settings are in .env.", flush=True)
 
 
 def prepare():
