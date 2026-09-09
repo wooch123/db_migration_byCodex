@@ -57,7 +57,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           .\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
-          .\.venv\Scripts\python.exe -m pytest -q tests/test_bootstrap.py
+          .\.venv\Scripts\python.exe -m pytest -q tests/test_bootstrap.py tests/test_update.py
   compatible-mirror:
     runs-on: ${{ matrix.os }}
     strategy:

@@ -31,6 +31,7 @@ Python 3.11 이상이 없으면 Windows는 **winget으로 Python 3.12 설치**, 
 | --- | --- | --- |
 | 웹 화면 실행 | `run.bat` | `./run.sh` |
 | 설치·환경 준비만 수행 | `run.bat --setup-only` | `./run.sh --setup-only` |
+| 최신 코드 내려받기·덮어쓰기 | `update.bat` | `./update.sh` |
 | 백그라운드 실행기 | `run.bat worker` | `./run.sh worker` |
 | 최근 두 달 검증 | `run.bat run --months 2 --chunk-days 7` | `./run.sh run --months 2 --chunk-days 7` |
 | 별도 환경 파일 | `run.bat --env-file "settings/test.env" web` | `./run.sh --env-file "settings/test.env" web` |
@@ -38,6 +39,8 @@ Python 3.11 이상이 없으면 Windows는 **winget으로 Python 3.12 설치**, 
 `worker`는 터미널에서 계속 실행됩니다. Ubuntu 로그인 종료·재부팅 후에도 유지하려면 [systemd 운영 가이드](docs/operations.md)를 사용하세요. 다른 폴더에서 실행해도 프로젝트 폴더를 기준으로 동작하며, `--env-file` 등 상대 경로 인자도 프로젝트 기준입니다.
 
 초기 설치에는 패키지 다운로드가 필요합니다. 폐쇄망 설치, Python 경로 지정과 설치 오류 조치는 [자동 실행 파일 설정](docs/operations.md#자동-실행-파일-설정)을 참고하세요.
+
+업데이트할 때는 앱/worker를 종료한 뒤 **`update.bat`를 더블클릭**하세요. 업데이트 스크립트는 `origin/main`을 내려받아 **Git 관리 대상 코드와 로컬 수정·커밋을 원격 최신 상태로 덮어씁니다.** `.env`, 기본 `data`, `.venv`, wheelhouse와 기존 Git 무시 파일은 보존합니다. 커밋·푸시·병합·파일 전체 정리 명령을 실행하지 않으며 Git hook도 비활성화합니다. 완료 후 `run.bat`를 다시 실행하면 필요한 패키지를 확인하고 앱을 시작합니다. Linux는 `./update.sh` 후 `./run.sh`를 실행합니다. [업데이트 동작과 제한](docs/operations.md#코드만-내려받는-업데이트)에서 자세히 확인할 수 있습니다.
 
 브라우저에서 [http://127.0.0.1:8000](http://127.0.0.1:8000)을 엽니다.
 
