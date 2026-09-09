@@ -75,7 +75,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Prepare a restricted mirror without annotated-doc
-        run: python -m pip download --only-binary=:all: -r tests/fixtures/compatible-mirror.txt --dest wheelhouse
+        run: |
+          python -m pip download --only-binary=:all: -r tests/fixtures/compatible-mirror.txt --dest wheelhouse
       - name: Automatically resolve and verify older compatible versions
         run: ${{ matrix.launcher }} --setup-only
         env:
