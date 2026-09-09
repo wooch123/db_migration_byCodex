@@ -1,11 +1,16 @@
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Supplied intranet endpoints. Settings still allows .env/environment overrides.
+DEFAULT_CLAIMS_BASE_URL: Final = "http://12.81.220.37:8080"
+DEFAULT_PRODUCT_BASE_URL: Final = "http://12.81.221.145:5273"
+DEFAULT_TARGET_BASE_URL: Final = "https://estgtask.samsungds.net"
 
 
 class Settings(BaseSettings):
@@ -18,19 +23,19 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, ge=1, le=65535)
     app_access_token: str = ""
     allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "[::1]"])
-    claims_base_url: str = "http://claims.mock.invalid"
+    claims_base_url: str = DEFAULT_CLAIMS_BASE_URL
     claims_path: str = "/api/searchFlashClaims"
     claims_from_param: str = "rcvDataFrom"
     claims_to_param: str = "rcvDateTo"
     claims_limit: int = Field(default=1000, ge=1, le=100000)
     claims_records_path: str = "auto"
     claims_headers: dict[str, str] = Field(default_factory=dict)
-    product_base_url: str = "http://products.mock.invalid"
+    product_base_url: str = DEFAULT_PRODUCT_BASE_URL
     product_schema_path: str = "/dbms/api/product-info/schema"
     product_record_path: str = "/dbms/api/product-info/record/{part_id}"
     product_records_path: str = "auto"
     product_headers: dict[str, str] = Field(default_factory=dict)
-    target_base_url: str = "https://target.mock.invalid"
+    target_base_url: str = DEFAULT_TARGET_BASE_URL
     target_path: str = "/api/external/far_table"
     target_headers: dict[str, str] = Field(default_factory=dict)
     allow_live_writes: bool = False

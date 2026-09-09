@@ -63,13 +63,21 @@ Python 3.11 이상이 없으면 Windows는 **winget으로 Python 3.12 설치**, 
 
 ## API 주소 및 사내망 전환
 
-세 API의 base URL과 endpoint 경로는 모두 [.env.example](.env.example)에 있습니다. 예시는 의도적으로 가상 주소만 포함합니다. 제공받은 사내 주소를 로컬 `.env`의 `CLAIMS_BASE_URL`, `PRODUCT_BASE_URL`, `TARGET_BASE_URL`에 입력하세요. Base URL에는 endpoint 경로를 포함하지 않습니다.
+제공한 사내 API 주소를 [config.py](claim_sync/config.py)의 `DEFAULT_CLAIMS_BASE_URL`, `DEFAULT_PRODUCT_BASE_URL`, `DEFAULT_TARGET_BASE_URL` 상수와 [.env.example](.env.example)에 기본값으로 저장했습니다. Base URL에는 endpoint 경로를 포함하지 않습니다.
+
+| API | 기본 Base URL |
+| --- | --- |
+| Claim 접수 이력 | `http://12.81.220.37:8080` |
+| 제품 schema / 제품 조회 | `http://12.81.221.145:5273` |
+| FAR 전송 | `https://estgtask.samsungds.net` |
+
+실행 시 **환경변수 → `.env` → 코드 기본 상수** 순서로 값을 적용합니다. 주소를 바꿀 때는 `.env`의 `CLAIMS_BASE_URL`, `PRODUCT_BASE_URL`, `TARGET_BASE_URL`만 수정하고 재시작하면 됩니다. 기존 `.env`에 가상 주소나 다른 주소가 있으면 그 값이 계속 우선 적용됩니다. 기본값 `APP_MODE=mock`에서는 위 주소를 사용하더라도 모든 요청을 내장 가상 서버에서 처리하며 사내 API로 네트워크 요청을 보내지 않습니다.
 
 ```dotenv
 APP_MODE=live
-CLAIMS_BASE_URL=http://internal-claims.example:8080
-PRODUCT_BASE_URL=http://internal-products.example:5273
-TARGET_BASE_URL=https://internal-target.example
+CLAIMS_BASE_URL=http://12.81.220.37:8080
+PRODUCT_BASE_URL=http://12.81.221.145:5273
+TARGET_BASE_URL=https://estgtask.samsungds.net
 CLAIMS_HEADERS={"Authorization":"Bearer REPLACE_LOCALLY"}
 PRODUCT_HEADERS={"X-API-Key":"REPLACE_LOCALLY"}
 TARGET_HEADERS={"Authorization":"Bearer REPLACE_LOCALLY"}
