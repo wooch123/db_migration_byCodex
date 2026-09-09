@@ -47,7 +47,7 @@
 
 ## 배포 검증 범위
 
-GitHub Actions에 Ubuntu + Python 3.11/3.12/3.13 자동 검사와 패키지 빌드를 구성했습니다. 실제 결과는 저장소의 [Actions](https://github.com/wooch123/db_migration_byCodex/actions)에서 확인할 수 있습니다.
+GitHub Actions의 **Ubuntu + Python 3.11/3.12/3.13 세 환경 모두 테스트·정적 검사·패키지 빌드가 성공했습니다.** 검증한 구현 커밋은 `628bf4c69bb5ba2340f8222e100a41f0f48d5ae5`이며 [실행 결과](https://github.com/wooch123/db_migration_byCodex/actions/runs/34344266498)에서 확인할 수 있습니다.
 
 로컬 컴퓨터에는 Ubuntu/WSL과 Docker 실행 환경이 설치되어 있지 않아 systemd 서비스 등록과 Docker 실행은 현지에서 수행하지 않았습니다. 서비스 파일·배포 문서를 제공하며 실제 사내 Ubuntu 환경에서 네트워크·권한·인증서를 함께 확인해야 합니다.
 
