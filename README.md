@@ -103,7 +103,7 @@ TARGET_UPSERT_CONFIRMED=false
 
 | 확인 항목 | 구현의 기본 가정 |
 | --- | --- |
-| 시작일 파라미터 | 제공한 URL 그대로 `rcvDataFrom` 사용. `CLAIMS_FROM_PARAM`으로 변경 가능 |
+| 시작일 파라미터 | `rcvDateFrom` 사용. `CLAIMS_FROM_PARAM`으로 변경 가능 |
 | 날짜 범위 | 시작일과 종료일 모두 포함. `rcvDate`가 요청 범위 밖이면 오류 |
 | Claim 응답 | 배열 또는 `data/items/records/results/claims` 래퍼. 사용자 지정 점 경로 지원 |
 | 제품 응답 | 단일 객체 또는 `data/record/result/records/items` 래퍼, 1개짜리 배열 |

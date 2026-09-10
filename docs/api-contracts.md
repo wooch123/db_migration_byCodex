@@ -3,7 +3,7 @@
 ## 1. Claim 수집
 
 ```http
-GET {CLAIMS_BASE_URL}{CLAIMS_PATH}?rcvDataFrom=2025-01-01&rcvDateTo=2025-01-07&limit=1000
+GET {CLAIMS_BASE_URL}{CLAIMS_PATH}?rcvDateFrom=2025-01-01&rcvDateTo=2025-01-07&limit=1000
 ```
 
 허용 응답 예:

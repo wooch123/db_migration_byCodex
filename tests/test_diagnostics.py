@@ -19,7 +19,7 @@ async def test_http_400_includes_actual_method_url_and_server_error(settings, st
         calls.append(request)
         return httpx.Response(
             400,
-            json={"detail": "잘못된 날짜 형식", "field": "rcvDataFrom"},
+            json={"detail": "잘못된 날짜 형식", "field": "rcvDateFrom"},
             headers={
                 "x-request-id": "server-req-123",
                 "set-cookie": "session=must-not-log",
@@ -40,11 +40,11 @@ async def test_http_400_includes_actual_method_url_and_server_error(settings, st
     assert len(calls) == 1
     assert f"요청: {calls[0].method} {calls[0].url}" in message.splitlines()
     assert "HTTP 400 Bad Request" in message
-    assert "잘못된 날짜 형식" in message and "rcvDataFrom" in message
+    assert "잘못된 날짜 형식" in message and "rcvDateFrom" in message
     assert "x-request-id: server-req-123" in message
     assert "must-not-log" not in message
     if endpoint == "claims":
-        assert "rcvDataFrom=2025-01-01&rcvDateTo=2025-01-31&limit=1000" in message
+        assert "rcvDateFrom=2025-01-01&rcvDateTo=2025-01-31&limit=1000" in message
     if endpoint == "target":
         assert not isinstance(error.value, AmbiguousDelivery)
 
@@ -117,7 +117,7 @@ async def test_diagnostics_redact_echoed_secrets(settings, store, json_body):
                 "http://claims.local/claims",
                 settings.claims_headers,
                 {
-                    "rcvDataFrom": "2025-01-01",
+                    "rcvDateFrom": "2025-01-01",
                     "access_token": "query-private-xyz",
                 },
             )
@@ -133,7 +133,7 @@ async def test_diagnostics_redact_echoed_secrets(settings, store, json_body):
         "proxy-secret",
     ):
         assert secret not in message
-    assert "http://claims.local/claims?rcvDataFrom=2025-01-01" in message
+    assert "http://claims.local/claims?rcvDateFrom=2025-01-01" in message
     assert "[REDACTED]" in message and "invalid request" in message
     assert "상태: HTTP 400" in message
 

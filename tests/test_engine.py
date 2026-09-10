@@ -162,7 +162,7 @@ async def test_get_retry_and_product_cache(settings, store, claim, product):
     assert job["succeeded"] == 2 and attempts == 2
     assert len([r for r in calls if "/record/" in r.url.path]) == 1
     claim_request = next(r for r in calls if "searchFlashClaims" in r.url.path)
-    assert claim_request.url.params["rcvDataFrom"] == "2025-01-01"
+    assert claim_request.url.params["rcvDateFrom"] == "2025-01-01"
     assert claim_request.url.params["rcvDateTo"] == "2025-01-01"
 
 

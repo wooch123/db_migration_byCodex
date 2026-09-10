@@ -164,6 +164,8 @@ Linux에서는 웹/worker 서비스를 중지한 상태에서 `./update.sh`를 �
 
 `.env`는 프로세스 시작 시 읽습니다. 변경 후 두 서비스를 재시작하세요. 웹과 worker는 같은 환경·전송 대상·DATA_DIR를 사용해야 합니다.
 
+Claim 시작일 파라미터는 `rcvDateFrom`입니다. 기존 `.env`에 `CLAIMS_FROM_PARAM`이 있으면 `CLAIMS_FROM_PARAM=rcvDateFrom`으로 맞추고 재시작하세요. 업데이트 스크립트는 사용자 `.env`를 보존하므로 코드만 갱신해도 기존 설정값이 자동으로 바뀌지는 않습니다.
+
 ```bash
 sudo systemctl restart claim-sync-worker.service claim-sync-web.service
 ```
@@ -234,7 +236,7 @@ sudo -u claimsync /opt/claim-sync/.venv/bin/python -c \
 
 HTTP 오류에는 아래 정보가 저장됩니다.
 
-- 실패 단계, GET/POST 방식, **실제로 요청한 전체 URL**. Claim 조회의 `rcvDataFrom`, `rcvDateTo`, `limit`와 제품 조회의 인코딩된 part ID 경로를 포함합니다.
+- 실패 단계, GET/POST 방식, **실제로 요청한 전체 URL**. Claim 조회의 `rcvDateFrom`, `rcvDateTo`, `limit`와 제품 조회의 인코딩된 part ID 경로를 포함합니다.
 - HTTP 상태 코드와 상태 설명, 응답 Content-Type.
 - 서버가 제공한 `x-request-id`, `x-correlation-id`, `traceparent`. API 담당자가 서버 로그와 대조할 때 사용할 수 있습니다.
 - 서버 응답 본문. JSON은 읽기 쉽게 표시하고 HTML·일반 텍스트 오류도 보존합니다. 오류 응답은 최대 8 KiB를 읽고, 마스킹 후 최대 4,096자까지 기록하며 초과분은 `[응답 일부 생략]`으로 표시합니다.
@@ -244,7 +246,7 @@ HTTP 오류에는 아래 정보가 저장됩니다.
 
 ```text
 Claim: HTTP 400
-요청: GET http://12.81.220.37:8080/api/searchFlashClaims?rcvDataFrom=2025-01-01&rcvDateTo=2025-01-31&limit=1000
+요청: GET http://12.81.220.37:8080/api/searchFlashClaims?rcvDateFrom=2025-01-01&rcvDateTo=2025-01-31&limit=1000
 상태: HTTP 400 Bad Request
 content-type: application/json
 서버 응답:

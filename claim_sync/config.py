@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "[::1]"])
     claims_base_url: str = DEFAULT_CLAIMS_BASE_URL
     claims_path: str = "/api/searchFlashClaims"
-    claims_from_param: str = "rcvDataFrom"
+    claims_from_param: str = "rcvDateFrom"
     claims_to_param: str = "rcvDateTo"
     claims_limit: int = Field(default=1000, ge=1, le=100000)
     claims_records_path: str = "auto"
