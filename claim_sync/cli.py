@@ -9,6 +9,8 @@ import uvicorn
 from filelock import Timeout
 
 from .config import Settings
+from .csv_import import CsvImportError
+from .csv_jobs import enqueue_csv
 from .engine import Engine
 from .models import RunSpec, ScheduleSpec
 from .runner import Runner
@@ -59,6 +61,15 @@ def main():
     run.add_argument("--end")
     run.add_argument("--chunk-days", type=int, default=7)
     run.add_argument("--send", action="store_true", help="POST mapped data; defaults to validation only")
+    csv = commands.add_parser("csv-import", help="Import one file from CSV_DIR without Claim/product lookups")
+    csv.add_argument("file", help="CSV filename within CSV_DIR, e.g. far-fields.csv")
+    csv.add_argument("--send", action="store_true", help="Send CSV values with POST/duplicate-key PATCH")
+    csv.add_argument(
+        "--blank-mode",
+        choices=("omit", "null"),
+        default="omit",
+        help="Omit blank cells or explicitly send null",
+    )
     schedule = commands.add_parser("schedule", help="Save a persistent schedule from a JSON file")
     schedule.add_argument("file")
     args = parser.parse_args()
@@ -95,13 +106,25 @@ def main():
                 print(
                     json.dumps(store.save_schedule(spec, settings.destination), ensure_ascii=False, indent=2)
                 )
-            elif args.command == "run":
-                spec = read_spec(args)
+            elif args.command in {"run", "csv-import"}:
                 runner = Runner(settings, store)
                 try:
                     with runner.lock.acquire(timeout=0):
                         store.recover()
-                        job_id = store.enqueue(spec, settings.destination, source="cli")
+                        if args.command == "csv-import":
+                            job_id = enqueue_csv(
+                                settings,
+                                store,
+                                args.file,
+                                dry_run=not args.send,
+                                blank_mode=args.blank_mode,
+                                source="csv-cli",
+                            )
+                        else:
+                            spec = read_spec(args)
+                            if spec.source_type == "csv":
+                                parser.error("Use csv-import <filename> to validate and snapshot CSV input.")
+                            job_id = store.enqueue(spec, settings.destination, source="cli")
                         asyncio.run(Engine(settings, store).run(job_id))
                 except Timeout:
                     parser.error(
@@ -110,6 +133,9 @@ def main():
                 result = store.job(job_id)
                 print(json.dumps(result, ensure_ascii=False, indent=2))
                 return 0 if result["status"] == "completed" else 1
+    except CsvImportError as exc:
+        print(f"CSV error: {exc}", file=sys.stderr)
+        return 2
     except (ValueError, OSError) as exc:
         # Avoid printing Settings ValidationError input values (which may contain secrets).
         print(

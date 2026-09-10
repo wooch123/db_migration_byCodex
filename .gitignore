@@ -20,3 +20,6 @@ certs/
 *.p12
 *.pem
 *.key
+csv/*
+!csv/.gitkeep
+!csv/README.md

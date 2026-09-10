@@ -24,6 +24,11 @@ const viewInfo = {
     "Claim 데이터 동기화",
     "접수 이력을 수집하고 제품 정보를 더해, FAR 데이터를 최신 상태로 유지하세요.",
   ],
+  csv: [
+    "CSV 가져오기",
+    "CSV에서 FAR 데이터 가져오기",
+    "프로젝트의 CSV 파일을 읽고 컬럼을 매핑하여 FAR 데이터를 추가하거나 수정하세요.",
+  ],
   history: [
     "실행 이력",
     "동기화 실행 이력",
@@ -47,6 +52,8 @@ const viewInfo = {
 };
 let state = null,
   selectedJob = null,
+  selectedJobSpec = null,
+  showClaimConfig = false,
   periodMode = "relative",
   currentView = "dashboard",
   events = [],
@@ -156,6 +163,7 @@ function setPeriod(mode) {
   $("absolute-fields").hidden = mode !== "absolute";
 }
 function loadSpec(spec) {
+  if (spec.source_type === "csv") return;
   setPeriod(spec.period_mode);
   if (![...$("months").options].some((o) => Number(o.value) === spec.months))
     $("months").add(new Option(`최근 ${spec.months}개월`, spec.months));
@@ -177,9 +185,59 @@ function showView(view) {
   $("breadcrumb").textContent = info[0];
   $("page-title").textContent = info[1];
   $("page-subtitle").textContent = info[2];
+  renderEnvironmentNotice();
   if (view === "schedule") preview();
+  if (view === "dashboard") renderDashboardSource();
+  if (view === "csv" && typeof loadCSVFiles === "function") loadCSVFiles();
   if (view === "attention")
     loadUnresolved().catch((e) => toast(e.message, true));
+}
+function renderDashboardSource() {
+  const csv = selectedJobSpec?.source_type === "csv";
+  $("metric-fetched-label").textContent = csv ? "읽은 CSV 행" : "조회한 Claim";
+  $("claims-workflow").hidden = csv;
+  $("csv-workflow").hidden = !csv;
+  $("claims-config-card").hidden = csv && !showClaimConfig;
+  $("dashboard-grid").classList.toggle("csv-result", csv && !showClaimConfig);
+  $("toggle-claims-config").textContent = showClaimConfig ? "Claim 설정 접기" : "Claim 동기화 설정";
+  $("toggle-claims-config").setAttribute("aria-expanded", String(showClaimConfig));
+  $("chunk-header").hidden = csv;
+  $("chunk-list").hidden = csv;
+  $("records-columns").innerHTML = (csv
+    ? ["FAR NO. / SAMPLE", "담당자", "F/W", "Release Date", "입력 필드", "처리 상태", ""]
+    : ["FAR NO. / SAMPLE", "접수일", "고객사", "PART ID", "제품 / 용량", "처리 상태", ""]
+  ).map((label) => `<th>${esc(label)}</th>`).join("");
+  if (currentView === "dashboard") {
+    $("page-title").textContent = csv ? "CSV 가져오기 결과" : viewInfo.dashboard[1];
+    $("page-subtitle").textContent = csv
+      ? "파일에서 읽은 데이터의 처리 결과와 실제 API 요청·응답을 확인하세요."
+      : viewInfo.dashboard[2];
+  }
+  renderEnvironmentNotice();
+}
+function renderEnvironmentNotice() {
+  if (!state) return;
+  const csv = currentView === "csv" || (currentView === "dashboard" && selectedJobSpec?.source_type === "csv");
+  $("environment-title").textContent = csv
+    ? "CSV 미리보기와 검증은 외부 API를 호출하지 않습니다."
+    : state.mode === "mock"
+      ? "가상 API 검증 환경에서 실행 중입니다."
+      : "실제 사내 API에서 데이터를 조회합니다.";
+  $("environment-description").textContent = csv
+    ? state.mode === "mock"
+      ? "CSV 전송 실행은 내장 가상 서버를 사용합니다. 입력한 데이터와 처리 결과를 확인하세요."
+      : `운영 전송 ${state.can_write ? "허용" : "잠금"} · 전송 실행 시 FAR API에 값을 보냅니다. Claim·제품 API는 조회하지 않습니다.`
+    : state.mode === "mock"
+      ? `모든 요청은 내장 가상 서버에서 처리됩니다. 가상 대상 DB ${number(state.mock_target_count)}건 · 시나리오: ${state.mock_scenario}`
+      : `운영 전송 ${state.can_write ? "허용" : "잠금"} · 현재 업무 키: ${state.key_fields.join(" + ")} · API 한도 ${number(state.limit)}건`;
+  $("environment-right").textContent = csv ? "로컬 CSV 파일" : `조회 한도 ${number(state.limit)}건 / 요청`;
+}
+function jobTitle(job) {
+  if (job.spec.source_type === "csv") return `CSV · ${job.spec.csv_filename || "파일 가져오기"}`;
+  if (job.start_date) return `${job.start_date} → ${job.end_date}`;
+  return job.spec.period_mode === "relative"
+    ? `최근 ${job.spec.months}개월`
+    : `${job.spec.start_date} → ${job.spec.end_date}`;
 }
 function updateExecutionHint() {
   const mock = state?.mode === "mock";
@@ -195,16 +253,7 @@ function renderState() {
   $("env-badge").textContent =
     state.mode === "mock" ? "● MOCK 환경" : "● LIVE 환경";
   $("env-badge").classList.toggle("live", state.mode === "live");
-  $("environment-title").textContent =
-    state.mode === "mock"
-      ? "가상 API 검증 환경에서 실행 중입니다."
-      : "실제 사내 API에서 데이터를 조회합니다.";
-  $("environment-description").textContent =
-    state.mode === "mock"
-      ? `모든 요청은 내장 가상 서버에서 처리됩니다. 가상 대상 DB ${number(state.mock_target_count)}건 · 시나리오: ${state.mock_scenario}`
-      : `운영 전송 ${state.can_write ? "허용" : "잠금"} · 현재 업무 키: ${state.key_fields.join(" + ")} · API 한도 ${number(state.limit)}건`;
-  $("environment-right").textContent =
-    `조회 한도 ${number(state.limit)}건 / 요청`;
+  renderEnvironmentNotice();
   $("runner-dot").classList.toggle("online", state.runner_alive);
   $("runner-label").textContent = state.runner_alive
     ? "실행기 정상 동작"
@@ -212,6 +261,7 @@ function renderState() {
   $("execution-mode").querySelector('[value="send"]').disabled =
     !state.can_write;
   updateExecutionHint();
+  if (typeof updateCSVControls === "function") updateCSVControls();
   $("history-count").textContent = state.jobs.length;
   $("attention-count").textContent = state.unresolved;
   const schedule = state.schedule;
@@ -237,7 +287,7 @@ function renderState() {
     ? state.jobs
         .map(
           (job) =>
-            `<div class="history-row"><div><strong>${job.start_date ? `${esc(job.start_date)} → ${esc(job.end_date)}` : job.spec.period_mode === "relative" ? `최근 ${job.spec.months}개월` : `${esc(job.spec.start_date)} → ${esc(job.spec.end_date)}`}</strong><p>${formatDate(job.created_at)} · ${job.spec.dry_run ? "검증" : "API 전송"} · ${esc(job.source)} · 처리 ${number(job.processed)}건 · 오류 ${number(job.failed + job.uncertain)}건</p></div><div class="inline-buttons">${badge(job.status)}<button class="button secondary small" data-job="${job.id}">결과 보기 →</button></div></div>`,
+            `<div class="history-row"><div><strong>${esc(jobTitle(job))}</strong><p>${formatDate(job.created_at)} · ${job.spec.dry_run ? "검증" : "API 전송"} · ${esc(job.source)} · 처리 ${number(job.processed)}건 · 오류 ${number(job.failed + job.uncertain)}건</p></div><div class="inline-buttons">${badge(job.status)}<button class="button secondary small" data-job="${job.id}">결과 보기 →</button></div></div>`,
         )
         .join("")
     : '<div class="table-empty">실행 이력이 없습니다. 대시보드에서 첫 동기화를 실행하세요.</div>';
@@ -255,13 +305,16 @@ function renderState() {
     .join("");
 }
 function renderJob(job) {
+  selectedJobSpec = job.spec;
+  const csv = job.spec.source_type === "csv";
+  renderDashboardSource();
   $("job-status").className = `pill status-${job.status}`;
   $("job-status").textContent = labels[job.status] || job.status;
-  $("job-title").textContent = job.start_date
+  $("job-title").textContent = csv ? jobTitle(job) : job.start_date
     ? `${job.start_date} → ${job.end_date}`
     : "실행 대기 중";
   $("job-meta").textContent =
-    `${job.spec.dry_run ? "전송 없이 검증" : "API 전송"} · ${job.spec.chunk_days}일 단위 · ${formatDate(job.started_at || job.created_at)} · #${job.id.slice(0, 8)}`;
+    `${job.spec.dry_run ? "전송 없이 검증" : "API 전송"} · ${csv ? "CSV 파일" : `${job.spec.chunk_days}일 단위`} · ${formatDate(job.started_at || job.created_at)} · #${job.id.slice(0, 8)}`;
   const active = ["queued", "running"].includes(job.status);
   $("cancel-button").hidden = !active;
   $("cancel-button").disabled = !!job.cancel_requested;
@@ -269,6 +322,7 @@ function renderJob(job) {
     ? "중지 요청됨"
     : "중지";
   $("retry-button").hidden = active;
+  $("retry-button").textContent = csv ? "같은 CSV 데이터 다시 실행" : "다시 실행";
   const terminal = !active;
   const chunkFailure =
     job.chunk_summary?.failures ??
@@ -293,12 +347,14 @@ function renderJob(job) {
   const progress =
     job.status === "completed"
       ? 100
-      : totalDays
+      : csv && job.fetched
+        ? Math.min(99, Math.round((job.processed / job.fetched) * 100))
+        : totalDays
         ? Math.min(99, Math.round((doneDays / totalDays) * 100))
         : 0;
   $("job-progress").value = progress;
   $("progress-label").textContent =
-    `처리 ${number(job.processed)} / 조회 ${number(job.fetched)}건`;
+    `처리 ${number(job.processed)} / ${csv ? "읽은 행" : "조회"} ${number(job.fetched)}건`;
   $("progress-value").textContent = terminal
     ? labels[job.status] || job.status
     : `${progress}%`;
@@ -309,7 +365,8 @@ function renderJob(job) {
   $("metric-failed").innerHTML =
     `${number(job.failed + job.uncertain + chunkFailure)}<span>건</span>`;
   $("metric-failed-note").textContent =
-    `조회 구간 오류 ${number(chunkFailure)}개 · 확인 대기 ${number(job.uncertain)}건`;
+    csv ? `행 오류 ${number(job.failed)}건 · 확인 대기 ${number(job.uncertain)}건`
+      : `조회 구간 오류 ${number(chunkFailure)}개 · 확인 대기 ${number(job.uncertain)}건`;
   $("chunk-note").textContent =
     `총 ${number(job.chunk_count)}개 구간${job.chunk_count > 400 ? " · 최근 400개 표시" : ""} · 자동 분할 포함`;
   $("chunk-list").innerHTML = job.chunks.length
@@ -355,7 +412,10 @@ async function loadRecords(jobId = selectedJob) {
     ? rows
         .map((row, index) => {
           const p = row.payload || {};
-          return `<tr class="record-row"><td><strong>${esc(p.far_no || "유효하지 않은 레코드")}</strong><small>${esc(p.sample_no || row.record_key)}</small></td><td>${esc(p.rcv_date || "—")}</td><td>${esc(p.cust_name || "—")}</td><td class="mono">${esc(p.part_id || "—")}</td><td>${esc(p.app || "—")}<small>${esc(p.density || "")}</small></td><td>${badge(row.status)}</td><td><button class="text-button" data-record="${index}" aria-label="${esc(p.far_no || "레코드")} 전송 데이터 보기">보기 →</button></td></tr>`;
+          const fields = selectedJobSpec?.source_type === "csv"
+            ? `<td>${esc(p.name ?? "—")}</td><td>${esc(p.firmware ?? "—")}</td><td>${esc(p.release_date ?? "—")}</td><td>${number(Object.keys(p).filter((key) => !["far_no", "sample_no"].includes(key)).length)}개</td>`
+            : `<td>${esc(p.rcv_date || "—")}</td><td>${esc(p.cust_name || "—")}</td><td class="mono">${esc(p.part_id || "—")}</td><td>${esc(p.app || "—")}<small>${esc(p.density || "")}</small></td>`;
+          return `<tr class="record-row"><td><strong>${esc(p.far_no || "유효하지 않은 레코드")}</strong><small>${esc(p.sample_no || row.record_key)}</small></td>${fields}<td>${badge(row.status)}</td><td><button class="text-button" data-record="${index}" aria-label="${esc(p.far_no || "레코드")} 전송 데이터 보기">보기 →</button></td></tr>`;
         })
         .join("")
     : '<tr><td colspan="7" class="table-empty">표시할 데이터가 없습니다.</td></tr>';
@@ -366,6 +426,7 @@ async function loadRecords(jobId = selectedJob) {
   $("next-page").disabled = offset + 25 >= total;
 }
 async function selectJob(id) {
+  showClaimConfig = false;
   selectedJob = id;
   if (typeof resetInspector === "function") resetInspector();
   offset = 0;
@@ -534,9 +595,10 @@ $("cancel-button").addEventListener("click", () =>
 );
 $("retry-button").addEventListener("click", () =>
   action($("retry-button"), async () => {
+    const csv = selectedJobSpec?.source_type === "csv";
     const result = await api(`/api/jobs/${selectedJob}/retry`, "POST");
     await selectJob(result.id);
-    toast("같은 설정으로 다시 실행합니다. 최근 기간은 새 실행일 기준입니다.");
+    toast(csv ? "이전 실행에 저장된 CSV 데이터로 다시 실행합니다." : "같은 설정으로 다시 실행합니다. 최근 기간은 새 실행일 기준입니다.");
   }),
 );
 $("errors-only").addEventListener("change", renderEvents);
@@ -618,8 +680,14 @@ $("schedule-form").addEventListener("submit", (e) => {
   });
 });
 $("back-to-config").addEventListener("click", () => {
+  showClaimConfig = true;
   showView("dashboard");
   $("months").focus();
+});
+$("toggle-claims-config").addEventListener("click", () => {
+  showClaimConfig = !showClaimConfig;
+  renderDashboardSource();
+  if (showClaimConfig) $("months").focus();
 });
 $("auth-form").addEventListener("submit", (e) => {
   e.preventDefault();

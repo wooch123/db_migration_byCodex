@@ -9,9 +9,10 @@
     />
     <title>Claim Sync · 데이터 동기화</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/static/style.css" />
-    <script src="/static/app.js" defer></script>
-    <script src="/static/inspector.js" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=csv-import-1" />
+    <script src="/static/app.js?v=csv-import-1" defer></script>
+    <script src="/static/csv.js?v=csv-import-1" defer></script>
+    <script src="/static/inspector.js?v=csv-import-1" defer></script>
   </head>
   <body>
     <aside class="sidebar">
@@ -31,6 +32,9 @@
       <nav aria-label="주 메뉴">
         <button class="nav-item active" data-view="dashboard">
           <span>▦</span>동기화 대시보드
+        </button>
+        <button class="nav-item" data-view="csv">
+          <span>▤</span>CSV 가져오기
         </button>
         <button class="nav-item" data-view="history">
           <span>◷</span>실행 이력<span id="history-count" class="nav-count"
@@ -108,7 +112,7 @@
         <section id="view-dashboard" class="view">
           <div class="metrics">
             <article class="metric">
-              <div>조회한 Claim <span>↙</span></div>
+              <div><span id="metric-fetched-label">조회한 Claim</span> <span>↙</span></div>
               <strong id="metric-fetched">0<span>건</span></strong
               ><small>선택한 실행 기준</small>
             </article>
@@ -128,7 +132,7 @@
               ><small id="metric-schedule-note">스케줄을 설정해 보세요</small>
             </article>
           </div>
-          <div class="pipeline card">
+          <div class="pipeline card" id="claims-workflow">
             <div class="pipeline-title">
               <span class="eyebrow">SYNC WORKFLOW</span
               ><strong>데이터 처리 흐름</strong>
@@ -157,8 +161,13 @@
               </div>
             </div>
           </div>
-          <div class="dashboard-grid">
-            <section class="card config-card">
+          <div class="notice" id="csv-workflow" hidden>
+            <div><strong>CSV 파일 → 헤더 매핑 → FAR 데이터 전송</strong><p>선택한 CSV 실행 결과입니다. 입력한 필드와 서버 응답은 아래 데이터 및 오른쪽 요청·응답 로그에서 확인하세요.</p></div>
+            <button class="text-button" data-view="csv">CSV 가져오기 →</button>
+            <button class="text-button" id="toggle-claims-config" aria-controls="claims-config-card" aria-expanded="false">Claim 동기화 설정</button>
+          </div>
+          <div class="dashboard-grid" id="dashboard-grid">
+            <section class="card config-card" id="claims-config-card">
               <div class="card-heading">
                 <h2>동기화 설정</h2>
                 <span class="pill neutral">수동 실행</span>
@@ -273,7 +282,7 @@
                 max="100"
                 aria-label="동기화 진행률"
               ></progress>
-              <div class="chunk-header">
+              <div class="chunk-header" id="chunk-header">
                 <span>조회 구간</span
                 ><small id="chunk-note"
                   >기간별 처리 상태가 여기에 표시됩니다.</small
@@ -333,7 +342,7 @@
             <div class="table-scroll">
               <table>
                 <thead>
-                  <tr>
+                  <tr id="records-columns">
                     <th>FAR NO. / SAMPLE</th>
                     <th>접수일</th>
                     <th>고객사</th>
@@ -363,6 +372,36 @@
               </div>
             </div>
           </section>
+        </section>
+
+        <section id="view-csv" class="view" hidden>
+          <div class="card padded csv-source-card">
+            <div class="card-heading"><div><h2>프로젝트 CSV 폴더</h2><p>CSV 파일을 아래 폴더에 저장한 뒤 목록을 새로고침하세요.<br>빈 양식은 <code>examples/far_import_template.csv</code>를 복사해서 사용하세요.</p></div><button class="button secondary small" id="csv-refresh">목록 새로고침</button></div>
+            <code id="csv-directory" class="csv-directory">폴더 확인 중…</code>
+            <p id="csv-limits" class="help">far와 sample은 각 행의 필수 값입니다. 필요한 컬럼만 CSV에 포함할 수 있습니다.</p>
+            <div id="csv-error" class="notice danger compact" role="alert" hidden></div>
+            <div class="csv-input-grid">
+              <div><label class="field-title" for="csv-file">가져올 파일</label><select id="csv-file" disabled><option value="">파일 목록을 불러오세요</option></select><p id="csv-file-meta" class="help">파일은 앱이 실행 중인 컴퓨터의 csv/ 폴더에서 읽습니다.</p></div>
+              <div><label class="field-title" for="csv-blank-mode">빈 셀 처리</label><select id="csv-blank-mode"><option value="omit">전송에서 제외 · 기존 값 유지</option><option value="null">null 전송 · 값 비우기 요청</option></select><p id="csv-blank-hint" class="help">빈 셀과 CSV에 없는 컬럼은 전송하지 않습니다. 수정 시 해당 기존 값은 유지됩니다.</p></div>
+            </div>
+            <div class="csv-source-actions"><button class="button primary" id="csv-preview" disabled>파일 읽기 · 미리보기</button><span id="csv-read-status" class="muted" role="status" aria-live="polite">파일을 선택하면 전송할 값을 확인할 수 있습니다.</span></div>
+          </div>
+
+          <section id="csv-preview-panel" class="card csv-preview-card" hidden>
+            <div class="card-heading"><div><h2>전송 데이터 미리보기</h2><p id="csv-preview-summary"></p></div><span id="csv-preview-status" class="pill neutral"></span></div>
+            <div class="csv-preview-notices">
+              <div id="csv-ignored" class="notice warning compact" hidden></div>
+              <div id="csv-validation-errors" class="notice danger compact" hidden></div>
+            </div>
+            <div class="table-scroll"><table><thead><tr><th>CSV 행</th><th>FAR / SAMPLE</th><th>담당자</th><th>F/W</th><th>입력 필드</th><th>전송 JSON</th></tr></thead><tbody id="csv-preview-body"></tbody></table></div>
+            <div class="csv-preview-footer"><p id="csv-preview-note" class="help"></p><div class="inline-buttons"><button class="button secondary" id="csv-validate" disabled>전송 없이 검증 실행</button><button class="button primary" id="csv-send" disabled>운영 API에 전송</button></div><p id="csv-send-hint" class="help">미리보기를 확인한 뒤 실행하세요.</p></div>
+          </section>
+
+          <details class="card csv-mapping-card">
+            <summary><strong>지원하는 CSV 컬럼</strong><span id="csv-mapping-count" class="muted">헤더 → 운영 서버 필드</span></summary>
+            <div class="soft-note">far와 sample로 대상을 식별합니다. 나머지는 필요한 컬럼만 넣으세요. 지원하지 않는 헤더는 전송에서 제외하며 미리보기에 표시합니다. 이미 있는 FAR / SAMPLE의 지정된 중복 오류에는 PATCH로 값을 수정합니다.</div>
+            <div class="table-scroll"><table><thead><tr><th>CSV 컬럼 헤더</th><th>운영 서버 필드</th></tr></thead><tbody id="csv-mapping-body"></tbody></table></div>
+          </details>
         </section>
 
         <section id="view-history" class="view" hidden>

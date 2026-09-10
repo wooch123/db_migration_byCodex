@@ -37,6 +37,9 @@ class Store:
                     id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT, time TEXT NOT NULL,
                     level TEXT NOT NULL, step TEXT NOT NULL, message TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS csv_imports (
+                    job_id TEXT PRIMARY KEY, snapshot TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS events_job ON events(job_id, id);
                 CREATE TABLE IF NOT EXISTS http_exchanges (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT, record_key TEXT,
@@ -100,6 +103,8 @@ class Store:
         )
 
     def enqueue(self, spec: RunSpec, destination: str, source="manual") -> str:
+        if spec.source_type == "csv":
+            raise ValueError("CSV 작업은 검증한 파일 데이터를 함께 등록해야 합니다.")
         job_id = uuid.uuid4().hex
         self.execute(
             "INSERT INTO jobs(id,spec,source,destination,created_at) VALUES(?,?,?,?,?)",
@@ -107,6 +112,34 @@ class Store:
         )
         self.event(job_id, "info", "queue", "실행 대기열에 등록했습니다.")
         return job_id
+
+    def enqueue_csv(self, spec: RunSpec, destination: str, snapshot: dict, source="csv") -> str:
+        if spec.source_type != "csv" or spec.csv_filename != snapshot["filename"]:
+            raise ValueError("CSV 실행 설정과 파일 데이터가 일치하지 않습니다.")
+        if snapshot.get("error_count") or not snapshot.get("rows"):
+            raise ValueError("오류가 없고 전송할 데이터가 있는 CSV만 등록할 수 있습니다.")
+        job_id = uuid.uuid4().hex
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO jobs(id,spec,source,destination,created_at) VALUES(?,?,?,?,?)",
+                (job_id, spec.model_dump_json(), source, destination, utcnow()),
+            )
+            db.execute("INSERT INTO csv_imports VALUES(?,?)", (job_id, encode(snapshot)))
+            db.execute(
+                "INSERT INTO events(job_id,time,level,step,message) VALUES(?,?,?,?,?)",
+                (
+                    job_id,
+                    utcnow(),
+                    "info",
+                    "queue",
+                    f"CSV {spec.csv_filename}: {len(snapshot['rows'])}행의 데이터를 저장하고 작업을 등록했습니다.",
+                ),
+            )
+        return job_id
+
+    def csv_snapshot(self, job_id: str) -> dict | None:
+        row = self.one("SELECT snapshot FROM csv_imports WHERE job_id=?", (job_id,))
+        return json.loads(row["snapshot"]) if row else None
 
     def job(self, job_id: str) -> dict | None:
         row = self.one("SELECT * FROM jobs WHERE id=?", (job_id,))

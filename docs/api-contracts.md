@@ -1,5 +1,7 @@
 # API 계약과 전송 규칙
 
+로컬 CSV의 추가 23개 필드, 빈칸 처리와 실행 규칙은 [CSV 가져오기](csv-import.md)를 참고하세요. 아래 Claim 매핑과 별도로 CSV에 포함한 필드만 같은 FAR POST/PATCH API에 전달합니다.
+
 ## 1. Claim 수집
 
 ```http
@@ -144,12 +146,15 @@ POST와 PATCH는 `.env`의 `TARGET_BASE_URL`·`TARGET_PATH`·`TARGET_HEADERS`와
 | GET | /api/state | 환경, 실행기 heartbeat, 최근 30개 이력, 스케줄 |
 | POST | /api/preview | 기간 및 기본 구간 수 계산 |
 | POST | /api/jobs | 실행 큐 등록 |
+| GET | /api/csv/files | CSV 폴더의 파일 목록·헤더 매핑·한도 |
+| POST | /api/csv/preview | filename·blank_mode로 전체 검증, 앞 50행·오류·sha256 반환 |
+| POST | /api/csv/jobs | filename·sha256·blank_mode·dry_run으로 검증된 CSV 작업 등록 |
 | GET | /api/jobs/{id} | 작업, 최근 400개 구간, 최근 500개 이벤트 |
 | GET | /api/jobs/{id}/records | 레코드 페이지·상태 필터 |
 | GET | /api/jobs/{id}/export | 전체 레코드 NDJSON 스트림 |
 | GET | /api/jobs/{id}/delivery-context | 이전 실행의 전송 확인 대기 원인과 요청 데이터 |
 | POST | /api/jobs/{id}/cancel | 중지 요청 |
-| POST | /api/jobs/{id}/retry | 같은 설정으로 새 실행 |
+| POST | /api/jobs/{id}/retry | 같은 설정으로 새 실행. CSV는 당시 저장한 파일 데이터 재사용 |
 | PUT | /api/schedule | 스케줄 저장 |
 | POST | /api/check | 조회 API 연결 검사 |
 | GET | /api/deliveries/unresolved | 최근 100개 확인 대기 |

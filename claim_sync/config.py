@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
     app_mode: Literal["mock", "live"] = "live"
     data_dir: Path = Path("data")
+    csv_dir: Path = Path("csv")
+    csv_max_bytes: int = Field(default=10485760, ge=1024, le=104857600)
+    csv_max_rows: int = Field(default=100000, ge=1, le=1000000)
     timezone: str = "Asia/Seoul"
     enable_runner: bool = True
     host: str = "127.0.0.1"

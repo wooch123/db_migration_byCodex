@@ -42,19 +42,22 @@ class Engine:
                 )
             if not spec.dry_run and not self.settings.can_write:
                 raise UpstreamError("실제 전송이 잠겨 있습니다. .env의 운영 전송 조건을 확인하세요.")
-            start, end = spec.resolve(self.settings.timezone)
-            self.store.update_job(job_id, start_date=str(start), end_date=str(end))
-            log(
-                "info",
-                "start",
-                f"{start} ~ {end} · {spec.chunk_days}일 단위 · {'전송 없이 검증' if spec.dry_run else 'API 전송'}",
-            )
-            cache = OrderedDict()
-            async with APIClients(self.settings, self.store, log, self.transport, job_id=job_id) as api:
-                await api.schema()
-                log("info", "schema", "제품 schema의 필수 8개 필드를 확인했습니다.")
-                for lower, upper in chunks(start, end, spec.chunk_days):
-                    await self.process_chunk(api, job_id, spec, lower, upper, cache)
+            if spec.source_type == "csv":
+                await self.run_csv(job_id, spec, log)
+            else:
+                start, end = spec.resolve(self.settings.timezone)
+                self.store.update_job(job_id, start_date=str(start), end_date=str(end))
+                log(
+                    "info",
+                    "start",
+                    f"{start} ~ {end} · {spec.chunk_days}일 단위 · {'전송 없이 검증' if spec.dry_run else 'API 전송'}",
+                )
+                cache = OrderedDict()
+                async with APIClients(self.settings, self.store, log, self.transport, job_id=job_id) as api:
+                    await api.schema()
+                    log("info", "schema", "제품 schema의 필수 8개 필드를 확인했습니다.")
+                    for lower, upper in chunks(start, end, spec.chunk_days):
+                        await self.process_chunk(api, job_id, spec, lower, upper, cache)
             final = self.store.job(job_id)
             bad_chunks = self.store.one(
                 "SELECT COUNT(*) n FROM chunks WHERE job_id=? AND status='failed'", (job_id,)
@@ -97,6 +100,39 @@ class Engine:
                 "UPDATE chunks SET status='interrupted' WHERE job_id=? AND status IN ('fetching','processing')",
                 (job_id,),
             )
+
+    async def run_csv(self, job_id, spec, log):
+        if (
+            set(self.settings.target_key_fields) != {"far_no", "sample_no"}
+            or len(self.settings.target_key_fields) != 2
+        ):
+            raise UpstreamError("CSV 가져오기에는 TARGET_KEY_FIELDS의 far_no와 sample_no 두 키가 필요합니다.")
+        snapshot = self.store.csv_snapshot(job_id)
+        if not snapshot or snapshot.get("error_count") or not snapshot.get("rows"):
+            raise UpstreamError("검증된 CSV 실행 데이터가 없습니다. CSV 가져오기 화면에서 새로 등록하세요.")
+        self.store.increment(job_id, fetched=len(snapshot["rows"]))
+        log(
+            "info",
+            "csv",
+            f"CSV {snapshot['filename']} · {snapshot['encoding']} · {len(snapshot['rows'])}행 · {'전송 없이 검증' if spec.dry_run else 'API 전송'} · 파일 해시 {snapshot['sha256']}",
+        )
+
+        async def process(api):
+            for row in snapshot["rows"]:
+                self.check_cancel(job_id)
+
+                async def prepare_values(values=row["values"]):
+                    return values
+
+                await self.process_values(api, job_id, spec, prepare_values, f"CSV {row['line']}행")
+                await asyncio.sleep(0)
+
+        # CSV validation needs no upstream API, client initialization, or TLS configuration.
+        if spec.dry_run:
+            await process(None)
+        else:
+            async with APIClients(self.settings, self.store, log, self.transport, job_id=job_id) as api:
+                await process(api)
 
     async def process_chunk(self, api, job_id, spec, start, end, cache):
         self.check_cancel(job_id)
@@ -157,10 +193,7 @@ class Engine:
             log("error", "chunk", str(exc))
 
     async def process_record(self, api, job_id, spec, claim, start, end, fallback_key, cache):
-        key, values = fallback_key, None
-        status, error = "failed", None
-        duplicate = False
-        try:
+        async def prepare_values():
             claim_date = normalized_date(claim.get("rcvDate"), "rcvDate")
             if not claim_date or not start <= date.fromisoformat(claim_date) <= end:
                 raise ValueError("rcvDate가 요청한 조회 구간에 포함되지 않습니다.")
@@ -171,7 +204,16 @@ class Engine:
                     cache.popitem(last=False)
             else:
                 cache.move_to_end(prefix)
-            values = map_record(claim, cache[prefix])
+            return map_record(claim, cache[prefix])
+
+        await self.process_values(api, job_id, spec, prepare_values, fallback_key)
+
+    async def process_values(self, api, job_id, spec, prepare_values, fallback_key):
+        key, values = fallback_key, None
+        status, error = "failed", None
+        duplicate = False
+        try:
+            values = await prepare_values()
             identity = [values.get(field) for field in self.settings.target_key_fields]
             if any(value is None or not str(value).strip() for value in identity):
                 raise ValueError("전송 대상의 업무 키 값이 비어 있습니다.")
@@ -242,6 +284,8 @@ class Engine:
             raise
         finally:
             if not duplicate:
+                if error and spec.source_type == "csv":
+                    error = f"{spec.csv_filename} · {fallback_key}\n{error}"
                 self.store.execute(
                     """INSERT INTO records(job_id,record_key,status,payload,error,created_at) VALUES(?,?,?,?,?,?)
                     ON CONFLICT(job_id,record_key) DO UPDATE SET status=excluded.status,error=excluded.error""",

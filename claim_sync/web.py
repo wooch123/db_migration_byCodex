@@ -14,6 +14,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .clients import APIClients, UpstreamError
 from .config import Settings
+from .csv_import import CsvImportError, list_csv_files, load_csv
+from .csv_jobs import enqueue_csv
 from .diagnostics import RequestDiagnostics
 from .http_log import previous_delivery
 from .models import RunSpec, ScheduleSpec
@@ -37,6 +39,16 @@ class ResolutionSelection(BaseModel):
 class SelectedResolution(BaseModel):
     items: list[ResolutionSelection] = Field(min_length=1, max_length=100)
     result: Literal["applied", "not_applied"]
+
+
+class CsvPreviewRequest(BaseModel):
+    filename: str = Field(min_length=1)
+    blank_mode: Literal["omit", "null"] = "omit"
+
+
+class CsvJobRequest(CsvPreviewRequest):
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dry_run: bool = True
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -147,6 +159,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/jobs", status_code=202)
     def create_job(spec: RunSpec):
+        if spec.source_type == "csv":
+            raise HTTPException(422, "CSV 가져오기 화면에서 파일을 확인하고 작업을 등록하세요.")
         validate_write(spec)
         if store.one("SELECT COUNT(*) n FROM jobs WHERE status='queued'")["n"] >= 20:
             raise HTTPException(409, "대기 작업이 20개입니다. 기존 작업을 처리하거나 취소하세요.")
@@ -154,6 +168,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/preview")
     def preview(spec: RunSpec):
+        if spec.source_type == "csv":
+            raise HTTPException(422, "CSV 미리보기 API를 사용하세요.")
         start, end = spec.resolve(settings.timezone)
         days = (end - start).days + 1
         return {
@@ -294,7 +310,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(409, "전송 대상이 변경되었습니다. 작업을 새로 등록하세요.")
         spec = RunSpec.model_validate(job["spec"])
         validate_write(spec)
+        if store.one("SELECT COUNT(*) n FROM jobs WHERE status='queued'")["n"] >= 20:
+            raise HTTPException(409, "대기 작업이 20개입니다. 기존 작업을 먼저 처리하세요.")
+        if spec.source_type == "csv":
+            snapshot = store.csv_snapshot(job_id)
+            if not snapshot:
+                raise HTTPException(409, "저장된 CSV 실행 데이터가 없습니다. 파일을 다시 가져오세요.")
+            return {"id": store.enqueue_csv(spec, settings.destination, snapshot, source="csv-retry")}
         return {"id": store.enqueue(spec, settings.destination, source="retry")}
+
+    @app.get("/api/csv/files")
+    def csv_files():
+        try:
+            return list_csv_files(settings)
+        except CsvImportError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/csv/preview")
+    def csv_preview(body: CsvPreviewRequest):
+        try:
+            result = load_csv(settings, body.filename, body.blank_mode)
+        except CsvImportError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {**result, "rows": result["rows"][:50], "preview_limit": 50}
+
+    @app.post("/api/csv/jobs", status_code=202)
+    def csv_job(body: CsvJobRequest):
+        validate_write(body)
+        if store.one("SELECT COUNT(*) n FROM jobs WHERE status='queued'")["n"] >= 20:
+            raise HTTPException(409, "대기 작업이 20개입니다. 기존 작업을 먼저 처리하세요.")
+        try:
+            job_id = enqueue_csv(
+                settings,
+                store,
+                body.filename,
+                dry_run=body.dry_run,
+                blank_mode=body.blank_mode,
+                sha256=body.sha256,
+            )
+        except CsvImportError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"id": job_id}
 
     @app.put("/api/schedule")
     def save_schedule(spec: ScheduleSpec):

@@ -406,7 +406,7 @@ main {
   align-items: center;
   justify-content: space-between;
 }
-.metric > div > span {
+.metric > div > span:last-child {
   font-size: 16px;
   color: #84928a;
   background: #f4f7f4;
@@ -1142,6 +1142,45 @@ td small {
 .mono {
   font-family: Consolas, monospace;
   overflow-wrap: anywhere;
+}
+.csv-source-card .card-heading,
+.csv-preview-card .card-heading { flex-wrap: wrap; gap: 14px; }
+.csv-source-card .card-heading > div,
+.csv-preview-card .card-heading > div { min-width: 0; }
+.csv-source-card .card-heading p,
+.csv-preview-card .card-heading p { overflow-wrap: anywhere; }
+.csv-directory { display: block; overflow-wrap: anywhere; background: #f4f8f5; border: 1px solid var(--border); border-radius: 6px; padding: 13px 15px; font: 12px/1.7 Consolas, monospace; color: #4c6c5a; }
+.csv-input-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 20px; margin-top: 24px; }
+.csv-input-grid > div { min-width: 0; }
+.csv-source-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-top: 22px; }
+.csv-source-actions > span { font-size: 11px; line-height: 1.8; }
+.csv-preview-card, .csv-mapping-card { margin-top: 22px; min-width: 0; }
+.csv-preview-notices { padding: 0 22px; }
+.csv-preview-notices .notice { overflow-wrap: anywhere; }
+.csv-preview-notices ul { margin: 9px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.8; max-height: 250px; overflow: auto; }
+.csv-preview-footer { padding: 4px 22px 20px; }
+.csv-preview-footer .inline-buttons { justify-content: flex-end; flex-wrap: wrap; margin-top: 18px; }
+.csv-preview-footer .help { overflow-wrap: anywhere; }
+.csv-mapping-card > summary { padding: 20px 22px; cursor: pointer; font-size: 13px; }
+.csv-mapping-card > summary > span { font-size: 11px; margin-left: 12px; }
+.csv-mapping-card .soft-note { margin-top: 0; }
+.csv-mapping-card td { white-space: normal; overflow-wrap: anywhere; }
+.csv-mapped { display: inline-block; font-size: 10px; color: var(--green); margin-left: 8px; }
+#csv-workflow { align-items: center; flex-wrap: wrap; }
+#csv-workflow > div { flex: 1 1 250px; }
+#dashboard-grid.csv-result { grid-template-columns: minmax(0, 1fr); }
+#job-title, .history-row strong { overflow-wrap: anywhere; }
+.activity-summary > div:first-child, .history-row > div:first-child { min-width: 0; }
+@media (min-width: 1200px) and (max-width: 1500px) {
+  .inspector-open .csv-input-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .csv-input-grid { grid-template-columns: 1fr; gap: 18px; }
+  .csv-preview-notices, .csv-preview-footer { padding-left: 17px; padding-right: 17px; }
+  .csv-preview-footer .inline-buttons { flex-direction: column; align-items: stretch; }
+  .csv-preview-footer .button { width: 100%; }
+  .csv-mapping-card > summary { padding: 18px; }
+  .csv-mapping-card > summary > span { display: block; margin: 8px 0 0 16px; }
 }
 footer {
   display: flex;

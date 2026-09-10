@@ -87,6 +87,11 @@ async function refreshInspector() {
     $("inspector-prev").disabled = inspector.offset === 0;
     $("inspector-next").disabled = inspector.offset + 30 >= data.total;
     if (!data.items.length) {
+      if (scope === "selected" && jobId === selectedJob &&
+          selectedJobSpec?.source_type === "csv" && selectedJobSpec.dry_run) {
+        emptyInspector("CSV 검증 실행은 외부 API를 호출하지 않습니다. 행별 전송 JSON은 데이터 미리보기에서 확인하세요.");
+        return;
+      }
       if (scope === "selected") {
         const filter = inspector.recordKey !== null ? `?record_key=${encodeURIComponent(inspector.recordKey)}` : "";
         const legacy = await api(`/api/jobs/${jobId}/delivery-context${filter}`);

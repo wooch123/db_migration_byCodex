@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class RunSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    source_type: Literal["claims", "csv"] = "claims"
+    csv_filename: str | None = None
     period_mode: Literal["relative", "absolute"] = "relative"
     months: int = Field(default=1, ge=1, le=120)
     start_date: date | None = None
@@ -17,6 +19,12 @@ class RunSpec(BaseModel):
 
     @model_validator(mode="after")
     def valid_dates(self):
+        if self.source_type == "csv":
+            if not self.csv_filename or not self.csv_filename.strip():
+                raise ValueError("CSV 파일 이름이 필요합니다.")
+            return self
+        if self.csv_filename is not None:
+            raise ValueError("Claim 조회에는 CSV 파일을 지정할 수 없습니다.")
         if self.period_mode == "absolute":
             if not self.start_date or not self.end_date:
                 raise ValueError("시작일과 종료일을 모두 입력하세요.")
@@ -27,6 +35,8 @@ class RunSpec(BaseModel):
         return self
 
     def resolve(self, timezone: str, now: datetime | None = None) -> tuple[date, date]:
+        if self.source_type == "csv":
+            raise ValueError("CSV 작업은 날짜 기간 대신 저장된 파일 데이터를 사용합니다.")
         if self.period_mode == "absolute":
             return self.start_date, self.end_date
         today = (now or datetime.now(ZoneInfo(timezone))).astimezone(ZoneInfo(timezone)).date()
@@ -42,6 +52,12 @@ class ScheduleSpec(BaseModel):
     enabled: bool = False
     interval_minutes: int = Field(default=60, ge=1, le=525600)
     run: RunSpec = Field(default_factory=RunSpec)
+
+    @model_validator(mode="after")
+    def claims_schedule(self):
+        if self.run.source_type != "claims":
+            raise ValueError("이 스케줄은 Claim 조회용입니다. CSV는 가져오기 화면이나 CLI에서 실행하세요.")
+        return self
 
 
 def chunks(start: date, end: date, days: int):
