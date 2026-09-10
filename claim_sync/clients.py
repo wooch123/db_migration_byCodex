@@ -27,13 +27,17 @@ class AmbiguousDelivery(UpstreamError):
     pass
 
 
-class DuplicateTarget(UpstreamError):
+class BadRequestTarget(UpstreamError):
+    """The target rejected a POST with HTTP 400."""
+
+
+class DuplicateTarget(BadRequestTarget):
     """The create was explicitly rejected for the FAR/sample composite key."""
 
 
 def duplicate_target(body: str) -> bool:
-    # Both the error code and column names must match. A generic 400 or a different
-    # UNIQUE constraint must never cause an update to an existing record.
+    # Claim imports require both the error code and column names to match.
+    # CSV imports explicitly opt into PATCH for any HTTP 400 rejection.
     try:
         result = json.loads(body)
     except (ValueError, RecursionError):
@@ -337,7 +341,7 @@ class APIClients:
         body = await self.get("제품 정보", s.product_base_url.rstrip("/") + path, s.product_headers)
         return product_record(body, s.product_records_path)
 
-    async def send(self, values: dict, fingerprint: str, *, record_key=None):
+    async def send(self, values: dict, fingerprint: str, *, record_key=None, patch_on_bad_request=False):
         s = self.settings
         if not s.can_write:
             raise UpstreamError(
@@ -345,7 +349,9 @@ class APIClients:
             )
         try:
             await self._write("POST", {"values": values}, fingerprint, record_key=record_key)
-        except DuplicateTarget as exc:
+        except BadRequestTarget as exc:
+            if not patch_on_bad_request and not isinstance(exc, DuplicateTarget):
+                raise
             where = {field: values.get(field) for field in ("far_no", "sample_no")}
             if any(not isinstance(value, str) or not value.strip() for value in where.values()):
                 raise UpstreamError(
@@ -356,7 +362,11 @@ class APIClients:
                 raise UpstreamError(
                     f"{exc}\nPATCH로 수정할 컬럼이 없습니다. 수정 요청은 보내지 않았습니다."
                 ) from exc
-            self.event("info", "patch", f"{exc}\n동일한 far_no·sample_no의 기존 행을 PATCH로 갱신합니다.")
+            self.event(
+                "info",
+                "patch",
+                f"{exc}\nPOST HTTP 400 응답에 따라 far_no·sample_no 조건으로 PATCH 수정을 요청합니다.",
+            )
             # A server may share its idempotency cache across methods. PATCH must not
             # reuse the rejected POST's response or request fingerprint.
             patch_key = hashlib.sha256(f"{fingerprint}:PATCH".encode()).hexdigest()
@@ -370,8 +380,8 @@ class APIClients:
         request = self.client.build_request(method, s.target_url, headers=headers)
         label = "수정 전송" if method == "PATCH" else "전송"
         try:
-            # Neither write method is retried after an uncertain response. Only the
-            # explicitly rejected duplicate POST may transition once to PATCH.
+            # Neither write method is retried after an uncertain response. send()
+            # may transition a rejected POST to PATCH once under its import policy.
             async with self.exchange(
                 "FAR 수정" if method == "PATCH" else "FAR 전송",
                 method,
@@ -393,11 +403,9 @@ class APIClients:
                     )
                 if not 200 <= response.status_code < 300:
                     preview = await self.error_preview(response, log)
-                    rejection = (
-                        DuplicateTarget
-                        if method == "POST" and response.status_code == 400 and duplicate_target(preview)
-                        else UpstreamError
-                    )
+                    rejection = UpstreamError
+                    if method == "POST" and response.status_code == 400:
+                        rejection = DuplicateTarget if duplicate_target(preview) else BadRequestTarget
                     raise rejection(
                         self.diagnostics.message(
                             f"{label} 거절",

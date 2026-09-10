@@ -247,7 +247,12 @@ class Engine:
                 try:
                     # A new operation key for A -> B -> A avoids reusing an old idempotent response.
                     operation_key = hashlib.sha256(f"{fingerprint}:{job_id}".encode()).hexdigest()
-                    await api.send(values, operation_key, record_key=key)
+                    await api.send(
+                        values,
+                        operation_key,
+                        record_key=key,
+                        patch_on_bad_request=spec.source_type == "csv",
+                    )
                 except (AmbiguousDelivery, asyncio.CancelledError) as exc:
                     self.store.save_delivery(
                         self.settings.destination,

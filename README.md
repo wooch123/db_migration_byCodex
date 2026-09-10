@@ -70,7 +70,7 @@ TARGET_BASE_URL=https://estgtask.samsungds.net
 - ISO 날짜 정규화, NAND/DRAM 조합, Part ID 좌측 15자 전송, 레코드별 검증.
 - 우측 요청·응답 패널: GET 조건, POST/PATCH JSON, 실제 응답 코드·본문·헤더·소요 시간, 이전 전송 오류 연결, 복사·JSON 저장. 인증 값은 가리며 본문 저장 한도는 `HTTP_LOG_BODY_BYTES`로 설정합니다.
 - SQLite에 작업·구간·레코드·이벤트·스케줄·성공 전송 상태 저장.
-- 동일 업무 키와 동일 전송 값은 건너뛰고 변경된 값은 다시 POST. 지정된 중복 응답일 때 PATCH로 전환.
+- 동일 업무 키와 동일 전송 값은 건너뛰고 변경된 값은 다시 POST. Claim은 지정된 중복 응답, CSV는 모든 HTTP 400 응답에서 PATCH로 한 번 전환.
 - GET 재시도, POST/PATCH 응답 유실 보류, 목록에서 체크해 반영됨·미반영을 처리하는 확인 화면, 실행 중지 및 재실행.
 - 자동 갱신, 프로세스 중복 실행 방지, 중단 이력 복구, 웹 없는 CLI 실행.
 - 실시간 상태/로그(2초 갱신), 실행 이력, 필터·페이지별 레코드, JSON 미리보기, NDJSON 내보내기.
@@ -81,7 +81,7 @@ TARGET_BASE_URL=https://estgtask.samsungds.net
 
 프로젝트에 `csv/` 폴더를 제공합니다. [CSV 입력 양식](examples/far_import_template.csv)을 복사해 `far`, `sample`과 필요한 값을 채운 뒤 웹의 **CSV 가져오기**에서 파일을 선택하세요. 미리보기로 헤더·값·오류를 확인한 후 검증 또는 API 전송을 실행할 수 있습니다. 기본값은 빈 셀을 전송에서 제외해 기존 서버 값을 유지하는 방식입니다.
 
-이 기능은 CSV 필드만 전송하며 Claim·제품 API를 조회하지 않습니다. `Release Date`도 텍스트로 전송합니다. 입력 파일은 Git에 업로드하지 않습니다. 전체 컬럼 매핑, 빈칸·텍스트 처리, `run.bat csv-import` 및 Ubuntu 사용 방법은 [CSV 가져오기 안내](docs/csv-import.md)를 참고하세요.
+이 기능은 CSV 필드만 전송하며 Claim·제품 API를 조회하지 않습니다. `Release Date`도 텍스트로 전송합니다. POST가 **HTTP 400 Bad Request**를 반환하면 오류 문구와 관계없이 같은 URL로 PATCH를 한 번 보냅니다. `where`는 `far_no`와 `sample_no`, `values`는 CSV에서 전송할 키 외 필드입니다. 입력 파일은 Git에 업로드하지 않습니다. 전체 컬럼 매핑, 빈칸·텍스트 처리, `run.bat csv-import` 및 Ubuntu 사용 방법은 [CSV 가져오기 안내](docs/csv-import.md)를 참고하세요.
 
 ## API 주소 및 사내망 전환
 
@@ -117,11 +117,11 @@ TARGET_UPSERT_CONFIRMED=false
 | 제품 응답 | 단일 객체 또는 `data/record/result/records/items` 래퍼, 1개짜리 배열 |
 | 제품 schema | JSON Schema `properties` 또는 `fields/columns` 배열. [응답 계약 문서](docs/api-contracts.md) 참조 |
 | 업무 키 | 로컬 중복 확인은 `TARGET_KEY_FIELDS`로 설정 가능. PATCH의 `where`는 서버 계약에 따라 항상 `far_no + sample_no` |
-| 기존 행 갱신 | POST의 HTTP 400 중 지정된 두 키의 UNIQUE 오류일 때 같은 URL로 PATCH 1회 |
+| 기존 행 갱신 | Claim은 지정된 두 키의 UNIQUE 오류, CSV는 모든 POST HTTP 400에서 같은 URL로 PATCH 1회 |
 | 빈 선택 필드 | JSON `null`로 전송. 필수 키·접수일·Part ID는 비어 있으면 실패 |
 | 성공 확인 | 오류 없는 2xx 응답(202 제외). 필요 시 `TARGET_SUCCESS_PATH`와 JSON `TARGET_SUCCESS_VALUE` 지정 |
 
-POST가 HTTP 400과 `ok:false`, `error.code="CREATE_FAIELD, UNIQUE"`, `error.massage="UNIQUE constraint failed: far_tabl.far_no, far_table.sample_no"`를 반환하면 PATCH로 전환합니다. 정상 철자인 `CREATE_FAILED`, `message`, `far_table`도 지원합니다. PATCH의 `where`에는 두 키를 넣고 `values`에는 나머지 19개 필드 전체를 `null`까지 포함해 보냅니다. 다른 400 오류는 수정 요청으로 바꾸지 않습니다. [정확한 요청·응답 규칙](docs/api-contracts.md#4-post-중복-시-patch-수정)을 참고하세요.
+Claim 동기화는 POST가 HTTP 400과 `ok:false`, `error.code="CREATE_FAIELD, UNIQUE"`, `error.massage="UNIQUE constraint failed: far_tabl.far_no, far_table.sample_no"`를 반환하면 PATCH로 전환합니다. 정상 철자인 `CREATE_FAILED`, `message`, `far_table`도 지원합니다. PATCH의 `where`에는 두 키를 넣고 `values`에는 나머지 19개 필드 전체를 `null`까지 포함해 보냅니다. Claim의 다른 400 오류는 수정 요청으로 바꾸지 않습니다. CSV는 모든 POST 400에서 입력 필드만 PATCH로 전송합니다. [정확한 요청·응답 규칙](docs/api-contracts.md#4-post-중복-시-patch-수정)을 참고하세요.
 
 POST와 PATCH는 모두 `.env`의 `TARGET_BASE_URL`, `TARGET_PATH`, `TARGET_HEADERS`, TLS/CA 설정을 사용합니다. 기존 전송 조건인 `ALLOW_LIVE_WRITES=true`, `TARGET_UPSERT_CONFIRMED=true`도 유지합니다. `TARGET_UPSERT_CONFIRMED`는 서버의 POST·PATCH 갱신 계약 확인을 뜻하며, POST 자체가 upsert여야 한다는 뜻은 아닙니다.
 

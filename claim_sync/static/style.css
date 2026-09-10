@@ -1168,7 +1168,6 @@ td small {
 .csv-mapped { display: inline-block; font-size: 10px; color: var(--green); margin-left: 8px; }
 #csv-workflow { align-items: center; flex-wrap: wrap; }
 #csv-workflow > div { flex: 1 1 250px; }
-#dashboard-grid.csv-result { grid-template-columns: minmax(0, 1fr); }
 #job-title, .history-row strong { overflow-wrap: anywhere; }
 .activity-summary > div:first-child, .history-row > div:first-child { min-width: 0; }
 @media (min-width: 1200px) and (max-width: 1500px) {

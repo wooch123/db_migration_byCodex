@@ -53,7 +53,6 @@ const viewInfo = {
 let state = null,
   selectedJob = null,
   selectedJobSpec = null,
-  showClaimConfig = false,
   periodMode = "relative",
   currentView = "dashboard",
   events = [],
@@ -195,29 +194,20 @@ function showView(view) {
 function renderDashboardSource() {
   const csv = selectedJobSpec?.source_type === "csv";
   $("metric-fetched-label").textContent = csv ? "읽은 CSV 행" : "조회한 Claim";
-  $("claims-workflow").hidden = csv;
+  $("claims-workflow").hidden = false;
   $("csv-workflow").hidden = !csv;
-  $("claims-config-card").hidden = csv && !showClaimConfig;
-  $("dashboard-grid").classList.toggle("csv-result", csv && !showClaimConfig);
-  $("toggle-claims-config").textContent = showClaimConfig ? "Claim 설정 접기" : "Claim 동기화 설정";
-  $("toggle-claims-config").setAttribute("aria-expanded", String(showClaimConfig));
+  $("claims-config-card").hidden = false;
   $("chunk-header").hidden = csv;
   $("chunk-list").hidden = csv;
   $("records-columns").innerHTML = (csv
     ? ["FAR NO. / SAMPLE", "담당자", "F/W", "Release Date", "입력 필드", "처리 상태", ""]
     : ["FAR NO. / SAMPLE", "접수일", "고객사", "PART ID", "제품 / 용량", "처리 상태", ""]
   ).map((label) => `<th>${esc(label)}</th>`).join("");
-  if (currentView === "dashboard") {
-    $("page-title").textContent = csv ? "CSV 가져오기 결과" : viewInfo.dashboard[1];
-    $("page-subtitle").textContent = csv
-      ? "파일에서 읽은 데이터의 처리 결과와 실제 API 요청·응답을 확인하세요."
-      : viewInfo.dashboard[2];
-  }
   renderEnvironmentNotice();
 }
 function renderEnvironmentNotice() {
   if (!state) return;
-  const csv = currentView === "csv" || (currentView === "dashboard" && selectedJobSpec?.source_type === "csv");
+  const csv = currentView === "csv";
   $("environment-title").textContent = csv
     ? "CSV 미리보기와 검증은 외부 API를 호출하지 않습니다."
     : state.mode === "mock"
@@ -426,7 +416,6 @@ async function loadRecords(jobId = selectedJob) {
   $("next-page").disabled = offset + 25 >= total;
 }
 async function selectJob(id) {
-  showClaimConfig = false;
   selectedJob = id;
   if (typeof resetInspector === "function") resetInspector();
   offset = 0;
@@ -680,14 +669,8 @@ $("schedule-form").addEventListener("submit", (e) => {
   });
 });
 $("back-to-config").addEventListener("click", () => {
-  showClaimConfig = true;
   showView("dashboard");
   $("months").focus();
-});
-$("toggle-claims-config").addEventListener("click", () => {
-  showClaimConfig = !showClaimConfig;
-  renderDashboardSource();
-  if (showClaimConfig) $("months").focus();
 });
 $("auth-form").addEventListener("submit", (e) => {
   e.preventDefault();

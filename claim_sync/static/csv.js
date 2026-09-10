@@ -48,7 +48,7 @@ function updateCSVControls() {
       ? "오류 없는 미리보기가 있어야 실행할 수 있습니다. 파일을 고쳤다면 다시 읽어주세요."
       : !state?.can_write
         ? "운영 전송이 잠겨 있습니다. .env의 ALLOW_LIVE_WRITES와 TARGET_UPSERT_CONFIRMED를 true로 설정하고 앱을 재시작하세요. 검증 실행은 가능합니다."
-        : "전체 유효 행을 전송합니다. 지정된 FAR / SAMPLE 중복 오류에는 PATCH로 입력한 필드를 수정합니다.";
+        : "전체 유효 행을 POST로 전송합니다. HTTP 400 Bad Request가 오면 같은 FAR / SAMPLE에 PATCH로 입력한 필드를 한 번 전송합니다.";
   const file = csvFiles.find((item) => item.name === $("csv-file").value);
   $("csv-file-meta").textContent = file
     ? `${csvSize(file.size)} · 마지막 수정 ${formatDate(file.modified_at)}`

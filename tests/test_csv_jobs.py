@@ -141,24 +141,159 @@ async def test_csv_patch_lost_response_stops_later_rows_and_preserves_original_p
     assert trace["state"] == "blocked" and trace["details"]["original"]["exchange_id"] == writes[1]["id"]
 
 
-async def test_csv_row_rejection_keeps_file_line_and_continues_without_patch(settings, store):
+@pytest.mark.parametrize("body_kind", ["json", "text", "truncated", "broken_stream"])
+async def test_csv_bad_request_patches_partial_fields_and_preserves_both_http_logs(
+    settings, store, body_kind
+):
+    path = write_csv(settings, "far,sample,F/W,Release Date\nF1,0001,001-FW,출시 일정 미정 / RC2\n")
+    settings.target_base_url = "https://target.example.test"
+    settings.target_path = "/custom/far_table?tenant=csv"
+    settings.http_log_body_bytes = 1024
+    job_id = enqueue_csv(settings, store, path.name, dry_run=False)
+    calls = []
+
+    class BrokenBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"Bad Request: required create field missing" + b" " * 1024
+            raise httpx.ReadError("error response body interrupted")
+
+    def respond(request):
+        calls.append(request)
+        if request.method == "POST":
+            if body_kind == "broken_stream":
+                return httpx.Response(400, stream=BrokenBody())
+            return (
+                httpx.Response(400, json={"ok": False, "error": "required create field missing"})
+                if body_kind == "json"
+                else httpx.Response(
+                    400,
+                    text="Bad Request: required create field missing"
+                    + (" " * 2048 if body_kind == "truncated" else ""),
+                )
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    transport = httpx.MockTransport(respond)
+    await Engine(settings, store, transport).run(job_id)
+    result = store.job(job_id)
+    assert result["status"] == "completed" and result["succeeded"] == 1
+    assert [request.method for request in calls] == ["POST", "PATCH"]
+    assert all(str(request.url) == settings.target_url for request in calls)
+    assert json.loads(calls[0].content) == {
+        "values": {
+            "far_no": "F1",
+            "sample_no": "0001",
+            "firmware": "001-FW",
+            "release_date": "출시 일정 미정 / RC2",
+        }
+    }
+    assert json.loads(calls[1].content) == {
+        "where": {"far_no": "F1", "sample_no": "0001"},
+        "values": {"firmware": "001-FW", "release_date": "출시 일정 미정 / RC2"},
+    }
+    logs = [
+        store.exchange(row["id"])
+        for row in store.query("SELECT id FROM http_exchanges WHERE job_id=? ORDER BY id", (job_id,))
+    ]
+    assert [(row["method"], row["status_code"], row["state"]) for row in logs] == [
+        ("POST", 400, "failed"),
+        ("PATCH", 200, "completed"),
+    ]
+    assert "required create field missing" in logs[0]["details"]["response"]["body"]
+    assert json.loads(logs[1]["details"]["response"]["body"]) == {"ok": True}
+    for log, request in zip(logs, calls, strict=True):
+        assert json.loads(log["details"]["request"]["body"]) == json.loads(request.content)
+    assert store.one("SELECT status FROM deliveries")["status"] == "success"
+    repeat_id = enqueue_csv(settings, store, path.name, dry_run=False)
+    await Engine(settings, store, transport).run(repeat_id)
+    assert store.job(repeat_id)["skipped"] == 1 and len(calls) == 2
+
+
+async def test_csv_patch_rejection_keeps_file_line_and_continues_without_loop(settings, store):
     path = write_csv(settings, "far,sample,F/W\nF1,01,bad-firmware\nF2,02,good-firmware\n")
     job_id = enqueue_csv(settings, store, path.name, dry_run=False)
     calls = []
 
     def respond(request):
         calls.append(request)
-        if json.loads(request.content)["values"]["far_no"] == "F1":
+        body = json.loads(request.content)
+        key = body["where"] if request.method == "PATCH" else body["values"]
+        if key["far_no"] == "F1":
             return httpx.Response(400, json={"ok": False, "error": "firmware validation failed"})
         return httpx.Response(200, json={"ok": True})
 
     await Engine(settings, store, httpx.MockTransport(respond)).run(job_id)
     result = store.job(job_id)
     assert result["status"] == "partial" and result["failed"] == result["succeeded"] == 1
-    assert [request.method for request in calls] == ["POST", "POST"]
+    assert [request.method for request in calls] == ["POST", "PATCH", "POST"]
+    logs = store.query("SELECT method,status_code FROM http_exchanges WHERE job_id=? ORDER BY id", (job_id,))
+    assert [(row["method"], row["status_code"]) for row in logs] == [
+        ("POST", 400),
+        ("PATCH", 400),
+        ("POST", 200),
+    ]
     record = store.one("SELECT error FROM records WHERE job_id=? AND status='failed'", (job_id,))
     assert path.name in record["error"] and "CSV 2행" in record["error"]
     assert "HTTP 400" in record["error"] and "firmware validation failed" in record["error"]
+    assert f"PATCH {settings.target_url}" in record["error"]
+
+
+@pytest.mark.parametrize("status", [403, 409, 422])
+async def test_csv_non_bad_request_rejection_never_patches(settings, store, status):
+    path = write_csv(settings, "far,sample,F/W\nF1,01,FW1\n")
+    job_id = enqueue_csv(settings, store, path.name, dry_run=False)
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(status, json={"ok": False, "error": "request rejected"})
+
+    await Engine(settings, store, httpx.MockTransport(respond)).run(job_id)
+    assert store.job(job_id)["status"] == "failed"
+    assert store.job(job_id)["failed"] == 1
+    assert [request.method for request in calls] == ["POST"]
+    assert store.one("SELECT status FROM deliveries")["status"] == "failed"
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+@pytest.mark.parametrize("failure", ["timeout", "server_error", "negative_ack"])
+async def test_csv_uncertain_write_stops_remaining_rows_and_blocks_repeat(settings, store, method, failure):
+    path = write_csv(settings, "far,sample,F/W\nF1,01,FW1\nF2,02,FW2\n")
+    job_id = enqueue_csv(settings, store, path.name, dry_run=False)
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        if request.method != method:
+            return httpx.Response(400, text="Bad Request")
+        if failure == "timeout":
+            raise httpx.ReadTimeout("write acknowledgement lost")
+        if failure == "server_error":
+            return httpx.Response(503, json={"error": "upstream unavailable"})
+        return httpx.Response(200, json={"ok": False})
+
+    transport = httpx.MockTransport(respond)
+    await Engine(settings, store, transport).run(job_id)
+    result = store.job(job_id)
+    assert result["status"] == "needs_attention" and result["uncertain"] == 1
+    assert result["succeeded"] == 0
+    expected_methods = ["POST"] if method == "POST" else ["POST", "PATCH"]
+    assert [request.method for request in calls] == expected_methods
+    assert store.one("SELECT COUNT(*) n FROM records WHERE job_id=?", (job_id,))["n"] == 1
+    assert store.one("SELECT status FROM deliveries")["status"] == "uncertain"
+    original = store.exchange(
+        store.one("SELECT id FROM http_exchanges WHERE job_id=? ORDER BY id DESC LIMIT 1", (job_id,))["id"]
+    )
+    assert original["method"] == method
+    assert original["status_code"] == {"timeout": None, "server_error": 503, "negative_ack": 200}[failure]
+    retry_id = enqueue_csv(settings, store, path.name, dry_run=False)
+    await Engine(settings, store, transport).run(retry_id)
+    assert store.job(retry_id)["status"] == "needs_attention"
+    assert [request.method for request in calls] == expected_methods
+    blocked = store.exchange(store.one("SELECT id FROM http_exchanges WHERE job_id=?", (retry_id,))["id"])
+    assert blocked["state"] == "blocked"
+    assert blocked["details"]["original"]["exchange_id"] == original["id"]
+    assert blocked["details"]["original"]["method"] == method
 
 
 @pytest.mark.parametrize("first_source", ["claims", "csv"])

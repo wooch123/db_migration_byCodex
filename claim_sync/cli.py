@@ -63,7 +63,7 @@ def main():
     run.add_argument("--send", action="store_true", help="POST mapped data; defaults to validation only")
     csv = commands.add_parser("csv-import", help="Import one file from CSV_DIR without Claim/product lookups")
     csv.add_argument("file", help="CSV filename within CSV_DIR, e.g. far-fields.csv")
-    csv.add_argument("--send", action="store_true", help="Send CSV values with POST/duplicate-key PATCH")
+    csv.add_argument("--send", action="store_true", help="Send CSV values with POST, then PATCH on HTTP 400")
     csv.add_argument(
         "--blank-mode",
         choices=("omit", "null"),

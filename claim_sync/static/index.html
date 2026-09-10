@@ -9,10 +9,10 @@
     />
     <title>Claim Sync · 데이터 동기화</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/static/style.css?v=csv-import-1" />
-    <script src="/static/app.js?v=csv-import-1" defer></script>
-    <script src="/static/csv.js?v=csv-import-1" defer></script>
-    <script src="/static/inspector.js?v=csv-import-1" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=csv-import-2" />
+    <script src="/static/app.js?v=csv-import-2" defer></script>
+    <script src="/static/csv.js?v=csv-import-2" defer></script>
+    <script src="/static/inspector.js?v=csv-import-2" defer></script>
   </head>
   <body>
     <aside class="sidebar">
@@ -164,7 +164,6 @@
           <div class="notice" id="csv-workflow" hidden>
             <div><strong>CSV 파일 → 헤더 매핑 → FAR 데이터 전송</strong><p>선택한 CSV 실행 결과입니다. 입력한 필드와 서버 응답은 아래 데이터 및 오른쪽 요청·응답 로그에서 확인하세요.</p></div>
             <button class="text-button" data-view="csv">CSV 가져오기 →</button>
-            <button class="text-button" id="toggle-claims-config" aria-controls="claims-config-card" aria-expanded="false">Claim 동기화 설정</button>
           </div>
           <div class="dashboard-grid" id="dashboard-grid">
             <section class="card config-card" id="claims-config-card">
@@ -399,7 +398,7 @@
 
           <details class="card csv-mapping-card">
             <summary><strong>지원하는 CSV 컬럼</strong><span id="csv-mapping-count" class="muted">헤더 → 운영 서버 필드</span></summary>
-            <div class="soft-note">far와 sample로 대상을 식별합니다. 나머지는 필요한 컬럼만 넣으세요. 지원하지 않는 헤더는 전송에서 제외하며 미리보기에 표시합니다. 이미 있는 FAR / SAMPLE의 지정된 중복 오류에는 PATCH로 값을 수정합니다.</div>
+            <div class="soft-note">far와 sample로 대상을 식별합니다. 나머지는 필요한 컬럼만 넣으세요. 지원하지 않는 헤더는 전송에서 제외하며 미리보기에 표시합니다. POST가 HTTP 400 Bad Request를 반환하면 같은 FAR / SAMPLE에 PATCH로 입력한 필드를 한 번 전송합니다.</div>
             <div class="table-scroll"><table><thead><tr><th>CSV 컬럼 헤더</th><th>운영 서버 필드</th></tr></thead><tbody id="csv-mapping-body"></tbody></table></div>
           </details>
         </section>

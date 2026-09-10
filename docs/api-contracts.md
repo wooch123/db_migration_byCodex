@@ -81,7 +81,7 @@ ISO timestamp의 날짜는 원본 시간대에서의 달력 날짜로 유지합�
 
 ## 4. POST 중복 시 PATCH 수정
 
-처음에는 `POST {TARGET_BASE_URL}{TARGET_PATH}`로 위의 21개 필드를 `{"values":{...}}` 형태로 보냅니다. 아래 조건을 모두 충족하는 응답에만 같은 URL로 PATCH를 한 번 보냅니다.
+Claim 동기화는 처음에 `POST {TARGET_BASE_URL}{TARGET_PATH}`로 위의 21개 필드를 `{"values":{...}}` 형태로 보냅니다. 아래 조건을 모두 충족하는 응답에만 같은 URL로 PATCH를 한 번 보냅니다. CSV의 별도 전환 조건은 이 절 아래에 설명합니다.
 
 - HTTP 상태는 **400**이고, 완전히 읽은 유효한 JSON의 `ok` 값이 `false`입니다.
 - `error.code`가 `CREATE_FAIELD, UNIQUE` 또는 정상 철자인 `CREATE_FAILED, UNIQUE`입니다.
@@ -122,13 +122,17 @@ Content-Type: application/json
 
 POST와 PATCH는 `.env`의 `TARGET_BASE_URL`·`TARGET_PATH`·`TARGET_HEADERS`와 같은 HTTP 연결의 TLS/CA·프록시 설정을 공유합니다. `TARGET_KEY_FIELDS`를 바꿔도 서버의 PATCH 검색 조건은 `far_no + sample_no`로 고정입니다. 실제 전송에는 기존 `ALLOW_LIVE_WRITES=true`와 `TARGET_UPSERT_CONFIRMED=true`가 모두 필요합니다. 두 번째 설정은 이 POST·PATCH 계약 확인을 뜻하며 POST 자체의 upsert 구현을 요구하지 않습니다.
 
-다른 HTTP 400, 409 등 다른 상태, HTML/잘못된 JSON, 잘리거나 수신 중 끊긴 오류 본문에서는 PATCH로 전환하지 않습니다. PATCH가 다시 중복 오류를 반환해도 반복하지 않습니다. POST 400과 PATCH 응답은 각각 실제 메서드·URL·본문·상태 코드로 우측 패널에 남습니다. 따라서 최종 실행이 성공하더라도 선행 POST 400 기록은 실패 요청으로 표시됩니다.
+Claim 동기화는 다른 HTTP 400, 409 등 다른 상태, HTML/잘못된 JSON, 잘리거나 수신 중 끊긴 오류 본문에서는 PATCH로 전환하지 않습니다.
+
+**CSV 가져오기는 POST의 HTTP 상태가 400이면 오류 코드·JSON 구조·본문 형식과 관계없이 PATCH로 한 번 전환합니다.** 본문이 잘렸거나 끝까지 읽히지 않아도 이미 받은 400 상태를 사용합니다. `where`는 비어 있지 않은 `far_no`와 `sample_no` 두 조건을 모두 사용하고, `values`는 해당 CSV 행에서 전송할 키 외 필드만 넣습니다. 누락된 컬럼은 추가하지 않으며 빈칸 제외/null 설정을 그대로 적용합니다. Claim·제품 조회를 호출하지 않습니다. 다른 HTTP 상태나 HTTP 응답을 받지 못한 네트워크 오류에서는 이 전환을 적용하지 않습니다. [CSV 전송 예시](csv-import.md#전송-및-재실행)를 참고하세요.
+
+두 방식 모두 PATCH가 다시 400을 반환해도 반복하지 않습니다. POST 400과 PATCH 응답은 각각 실제 메서드·URL·본문·상태 코드로 우측 패널에 남습니다. 따라서 최종 실행이 성공하더라도 선행 POST 400 기록은 실패 요청으로 표시됩니다.
 
 ## 5. 재시도·중복·반영 확인
 
 - GET만 지수 지연으로 재시도합니다. `408/429/500/502/503/504` 및 네트워크 오류에 적용하며 숫자형 `Retry-After`도 최대 60초까지 반영합니다.
-- POST와 PATCH는 자동 재시도하지 않습니다. 네트워크 오류, 5xx, 202, 408, 429, 애플리케이션 오류, 확인 응답 파싱 실패는 `uncertain`입니다. 해당 실행을 멈추고 이후 같은 업무 키도 보류합니다. 앞 절의 중복 거절 응답에 따른 PATCH 전환만 허용합니다.
-- 일반 4xx 및 redirect는 실패로 기록합니다. 지정된 POST 400 중복 오류만 PATCH로 전환합니다. Redirect를 따라 다른 서버로 인증 정보를 보내지 않습니다.
+- POST와 PATCH는 자동 재시도하지 않습니다. 네트워크 오류, 5xx, 202, 408, 429, 애플리케이션 오류, 확인 응답 파싱 실패는 `uncertain`입니다. 해당 실행을 멈추고 이후 같은 업무 키도 보류합니다. 앞 절에서 정한 POST 400의 PATCH 전환은 한 번만 허용합니다.
+- 일반 4xx 및 redirect는 실패로 기록합니다. Claim은 지정된 POST 400 중복 오류, CSV는 모든 POST 400에서 PATCH로 전환합니다. Redirect를 따라 다른 서버로 인증 정보를 보내지 않습니다.
 - 기본 성공 조건은 오류 없는 2xx(202 제외). 예: `{"ok":true}`, `{"success":true}`와 204. `ok:false`도 애플리케이션 오류로 처리합니다. 서버가 `{"code":"OK"}`를 반환하면 `TARGET_SUCCESS_PATH=code`, `TARGET_SUCCESS_VALUE='"OK"'`를 설정할 수 있으며 POST와 PATCH 모두에 적용합니다.
 - 성공 ledger는 대상 URL + 모드 + 데이터셋 + 업무 키 설정으로 분리합니다. POST 또는 PATCH 성공 후 같은 전송 값은 건너뛰며 값이 달라지면 다시 POST부터 시작합니다. 인증 헤더의 tenant가 바뀌면 `TARGET_DATASET_ID`를 반드시 바꿉니다.
 - 매 작업·값에 대한 `Idempotency-Key`를 전달하고 PATCH에는 POST와 다른 키를 사용합니다. 서버 지원 여부는 알 수 없으므로 정확히 한 번 전달을 보장한다고 가정하지 않습니다. 값이 A→B→A로 돌아와도 과거 A 요청의 응답이 재사용되지 않도록 작업 ID를 포함합니다.

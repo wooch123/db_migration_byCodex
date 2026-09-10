@@ -1,6 +1,6 @@
 # 로컬 CSV의 FAR 필드 가져오기
 
-프로젝트의 `csv/` 폴더에 입력 파일을 두고 웹의 **CSV 가져오기**에서 선택합니다. 이 기능은 Claim·제품 API를 조회하지 않고 CSV에 있는 필드만 FAR API로 전송합니다. 새 행은 POST로 생성하고, 기존에 확인된 `far_no + sample_no` 중복 오류가 오면 같은 URL의 PATCH로 수정합니다.
+프로젝트의 `csv/` 폴더에 입력 파일을 두고 웹의 **CSV 가져오기**에서 선택합니다. 이 기능은 Claim·제품 API를 조회하지 않고 CSV에 있는 필드만 FAR API로 전송합니다. POST가 **HTTP 400 Bad Request**를 반환하면 응답 JSON이나 오류 문구와 관계없이 같은 URL로 PATCH를 한 번 보냅니다.
 
 ## 파일 준비
 
@@ -55,7 +55,9 @@
 
 예를 들어 CSV 헤더가 `far,sample,담당자,F/W`이고 한 행에 값을 채웠다면 POST는 `{"values":{"far_no":"...","sample_no":"...","name":"...","firmware":"..."}}`입니다. 다른 FAR 필드는 추가하지 않습니다.
 
-중복일 때 PATCH의 `where`는 `far_no`와 `sample_no`, `values`는 이 CSV 행의 키 외 입력 필드입니다. Claim 전송의 19개 필드 전체로 확장하지 않습니다. CSV에 넣지 않은 기존 서버 컬럼은 PATCH 요청에 포함하지 않습니다. 서버가 신규 생성 시 이 목록 밖의 필드를 필수로 요구하면 실제 거절 응답을 로그에 표시합니다.
+POST 400 이후 PATCH의 `where`는 `far_no`와 `sample_no` 두 조건을 모두 사용하고, `values`에는 이 CSV 행에서 전송할 키 외 필드만 넣습니다. CSV에 없는 기존 서버 컬럼은 수정 요청에 포함하지 않습니다. 예를 들어 위 행의 PATCH는 `{"where":{"far_no":"...","sample_no":"..."},"values":{"name":"...","firmware":"..."}}`입니다.
+
+CSV의 PATCH 전환은 HTTP 400 수신 여부로 판단합니다. 일반 JSON 오류나 텍스트 응답도 전환하며, 본문이 잘렸거나 끝까지 읽히지 않아도 이미 받은 400 상태를 사용합니다. 다른 HTTP 상태나 HTTP 응답을 받지 못한 네트워크 오류에서는 이 전환을 적용하지 않으며, PATCH가 다시 400을 반환해도 반복하지 않습니다. 우측 요청·응답 로그에 POST와 PATCH의 URL, JSON, 실제 상태 코드와 응답이 각각 남습니다. Claim 동기화는 기존처럼 지정된 두 키의 UNIQUE 오류일 때만 PATCH로 전환합니다.
 
 전송 URL·인증 헤더·TLS/CA·프록시는 기존 `.env` 설정을 함께 사용합니다. CSV의 업무 키는 `far_no + sample_no`이며 `TARGET_KEY_FIELDS`도 이 두 필드를 사용해야 합니다. 전송 성공·확인 대기 기록은 Claim 동기화와 공유하므로 같은 키의 이전 전송이 불확실하면 CSV도 자동 재전송하지 않습니다. 확인 대기 목록에서 반영 여부를 처리한 뒤 실행하세요.
 

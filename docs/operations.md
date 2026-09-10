@@ -178,13 +178,15 @@ sudo systemctl restart claim-sync-worker.service claim-sync-web.service
 
 ### 기존 행의 자동 수정
 
-API 전송은 POST로 시작합니다. 서버가 HTTP 400과 다음 JSON을 반환하면 **같은 주소로 PATCH를 한 번** 보내 기존 행을 수정합니다.
+Claim API 전송은 POST로 시작합니다. 서버가 HTTP 400과 다음 JSON을 반환하면 **같은 주소로 PATCH를 한 번** 보내 기존 행을 수정합니다.
 
 ```json
 {"ok":false,"error":{"code":"CREATE_FAIELD, UNIQUE","massage":"UNIQUE constraint failed: far_tabl.far_no, far_table.sample_no"}}
 ```
 
-정상 철자인 `CREATE_FAILED`, `message`, `far_table`도 지원합니다. 다른 칸의 UNIQUE 오류, 일반 400, 잘못된 JSON, 읽다가 끊기거나 잘린 응답은 수정 요청으로 전환하지 않습니다. PATCH의 `where`는 `far_no`와 `sample_no` 모두를 사용하며 `values`는 두 키를 제외한 19개 필드 전체입니다. `null`도 전송하고 `part_id`는 앞 15자로 유지합니다. [전송 계약](api-contracts.md#4-post-중복-시-patch-수정)에 전체 JSON 예시가 있습니다.
+정상 철자인 `CREATE_FAILED`, `message`, `far_table`도 지원합니다. Claim 동기화는 다른 칸의 UNIQUE 오류, 일반 400, 잘못된 JSON, 읽다가 끊기거나 잘린 응답을 수정 요청으로 전환하지 않습니다. PATCH의 `where`는 `far_no`와 `sample_no` 모두를 사용하며 `values`는 두 키를 제외한 19개 필드 전체입니다. `null`도 전송하고 `part_id`는 앞 15자로 유지합니다. [전송 계약](api-contracts.md#4-post-중복-시-patch-수정)에 전체 JSON 예시가 있습니다.
+
+CSV 가져오기는 **모든 POST HTTP 400 Bad Request에서 PATCH를 한 번** 보냅니다. 일반 JSON이나 텍스트 오류에도 적용합니다. `where`의 두 키는 동일하고 `values`에는 CSV에서 전송할 키 외 필드만 넣습니다. 다른 HTTP 상태나 HTTP 응답을 받지 못한 네트워크 오류에서는 이 전환을 적용하지 않으며, PATCH가 다시 400을 반환해도 반복하지 않습니다.
 
 별도의 PATCH 주소 설정은 필요하지 않습니다. `.env`의 `TARGET_BASE_URL`, `TARGET_PATH`, `TARGET_HEADERS`, TLS/CA·프록시 설정을 POST와 PATCH가 함께 사용합니다. 기존 `ALLOW_LIVE_WRITES=true`, `TARGET_UPSERT_CONFIRMED=true` 조건도 유지합니다. `TARGET_UPSERT_CONFIRMED`는 이 POST·PATCH 계약을 확인했다는 뜻입니다.
 
@@ -299,12 +301,12 @@ sudo -u claimsync /opt/claim-sync/.venv/bin/python -c \
 - 요청을 선택하면 요청 URL, GET 쿼리, POST/PATCH JSON, 인증정보를 가린 요청·응답 헤더, 실제 응답 코드·본문, 요청 시각과 소요 시간, 재시도 순서를 확인합니다. `목록 접기`로 상세 영역을 넓힐 수 있습니다.
 - `최신 요청 따라가기`를 끄거나 과거 요청을 선택하면 상세 내용을 읽는 동안 선택이 유지됩니다. `전체 복사`와 `JSON 저장`은 선택한 요청의 상세 기록을 내보냅니다.
 - 연결·SSL 오류로 HTTP 응답을 받지 못하면 응답 코드가 없음을 표시합니다. 이전 전송 때문에 이번 실행을 보류했으면 `전송 안 함`으로 표시하고 원래 실패한 실행의 오류, 실제 POST 또는 PATCH 데이터와 상세 기록을 연결합니다. 기록을 열어보는 동작은 재전송하지 않습니다.
-- 지정된 UNIQUE 응답으로 수정 전환한 실행에는 POST 400과 PATCH 기록이 함께 남습니다. 최종 실행이 성공해도 POST 400은 실제 실패 응답으로 유지됩니다. PATCH 요청의 `where`와 `values`, 실제 응답 코드를 확인하세요.
+- Claim의 지정된 UNIQUE 응답 또는 CSV의 HTTP 400으로 수정 전환한 실행에는 POST 400과 PATCH 기록이 함께 남습니다. 최종 실행이 성공해도 POST 400은 실제 실패 응답으로 유지됩니다. PATCH 요청의 `where`와 `values`, 실제 응답 코드를 확인하세요.
 - 업데이트 이전 실행은 저장돼 있는 전송 데이터와 원래 delivery 오류를 찾아 표시합니다. 당시 저장하지 않았던 HTTP 상태 코드나 응답 본문을 추측해서 채우지는 않습니다.
 
 공유 처리 엔진이 요청하기 전에 SQLite의 `http_exchanges`에 기록하고, 응답을 받으면 결과를 갱신합니다. 웹·Ubuntu worker 모두 동일하게 저장합니다. 기존 DB에는 시작 시 새 테이블과 인덱스만 추가하며 기존 실행 이력은 유지합니다.
 
-요청·응답 본문 저장 한도는 `.env`의 `HTTP_LOG_BODY_BYTES`이며 기본 262,144 bytes(256 KiB), 최대 10 MiB입니다. 한도보다 큰 본문은 앞부분과 생략 여부를 표시합니다. 더 많이 보관해야 한다면 값을 늘리고 재시작하세요. 설정 변경은 이후 요청부터 적용됩니다. 이 한도는 실제 전송 JSON을 자르거나 `MAX_RESPONSE_BYTES`의 조회 처리 한도를 변경하지 않습니다. 다만 오류 본문은 이 한도까지만 읽으므로 초과한 POST 400 응답으로는 UNIQUE 오류를 확정하거나 PATCH로 전환하지 않습니다.
+요청·응답 본문 저장 한도는 `.env`의 `HTTP_LOG_BODY_BYTES`이며 기본 262,144 bytes(256 KiB), 최대 10 MiB입니다. 한도보다 큰 본문은 앞부분과 생략 여부를 표시합니다. 더 많이 보관해야 한다면 값을 늘리고 재시작하세요. 설정 변경은 이후 요청부터 적용됩니다. 이 한도는 실제 전송 JSON을 자르거나 `MAX_RESPONSE_BYTES`의 조회 처리 한도를 변경하지 않습니다. Claim은 오류 본문이 한도를 초과하면 UNIQUE 오류를 확정할 수 없어 PATCH로 전환하지 않습니다. CSV는 본문이 잘렸거나 읽기에 실패해도 이미 HTTP 400을 받았다면 PATCH로 전환하며, 본문 생략·읽기 실패 표시를 로그에 유지합니다.
 
 기존 **실행 이력 → 해당 실행 → 처리 로그**의 간단한 오류와 레코드별 오류도 계속 사용할 수 있습니다. **API 연결 및 매핑 → 연결 확인**은 요청 결과를 우측 패널에도 저장합니다.
 
@@ -340,7 +342,7 @@ content-type: application/json
 | Claim/제품 JSON 경로 오류 | `.env`의 응답 경로 설정 변경 |
 | 하루치 limit 도달 | API 담당자에게 pagination/시각 단위/더 높은 검증된 한도 요청 |
 | HTTP 400/422 | 오류의 요청 URL·조회 조건과 서버 응답의 필드 오류 확인. 전송 오류는 해당 레코드의 전송 JSON과 비교 |
-| POST 400 후 PATCH 기록 | 두 키의 UNIQUE 오류로 수정 전환한 기록. PATCH 응답과 최종 실행 상태를 확인 |
+| POST 400 후 PATCH 기록 | Claim의 지정된 UNIQUE 오류 또는 CSV의 HTTP 400으로 수정 전환한 기록. PATCH 응답과 최종 실행 상태를 확인 |
 | HTTP 401/403 | 각 API의 인증 헤더와 계정 권한 확인 |
 | 인증서 오류 | 사내 CA bundle 경로와 신뢰 체인 확인. PFX/P12는 `export-ca.bat`로 공개 CA PEM을 추출한 뒤 지정 |
 | 확인 대기 | 대상 DB에서 업무 키와 모든 전송 값을 대조하고 목록에서 체크해 반영됨·미반영 처리 |
