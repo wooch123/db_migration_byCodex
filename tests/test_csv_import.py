@@ -62,10 +62,7 @@ def test_exact_field_mapping_and_leading_zero_text(csv_settings):
     assert result["encoding"] == "utf-8-sig"
     assert result["valid_rows"] == result["total_rows"] == 1
     values = result["rows"][0]["values"]
-    assert values == {
-        target: "2025-01-31" if target == "release_date" else data[index]
-        for index, (_, target) in enumerate(expected)
-    }
+    assert values == {target: data[index] for index, (_, target) in enumerate(expected)}
 
 
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "cp949"])
@@ -112,34 +109,31 @@ def test_explicit_null_only_clears_headers_present_in_file(csv_settings):
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
+    "value",
     [
-        ("2024-02-29", "2024-02-29"),
-        ("2025/01/31", "2025-01-31"),
-        ("2025.01.31", "2025-01-31"),
-        ("2025-1-2", "2025-01-02"),
-        ("2025/1/2", "2025-01-02"),
-        ("2025.1.2", "2025-01-02"),
-        ("2025-01-31T23:45:12Z", "2025-01-31"),
-        ("2025-01-31T23:45:12.345-08:00", "2025-01-31"),
-        ("2025-01-31 23:45:12", "2025-01-31"),
+        "2024-02-29",
+        "2025/01/31",
+        "2025.01.31",
+        "2025-1-2",
+        "2025/1/2",
+        "2025.1.2",
+        "2025-01-31T23:45:12Z",
+        "2025-01-31T23:45:12.345-08:00",
+        "2025-01-31 23:45:12",
+        "2025-02-29",
+        "01/02/2025",
+        "46000",
+        "2025/01.31",
+        "2025-01-31T25:00",
+        "미정 / Release Candidate 2",
+        "00012345678901234567890",
     ],
 )
-def test_release_dates(csv_settings, value, expected):
-    name, _ = write_csv(csv_settings, f"far,sample,Release Date\n001,002,{value}\n")
+def test_release_date_preserves_text_without_date_validation(csv_settings, value):
+    name, _ = write_csv(csv_settings, f"far,sample,Release Date\n001,002,  {value}  \n")
     result = load_csv(csv_settings, name)
     assert result["error_count"] == 0
-    assert result["rows"][0]["values"]["release_date"] == expected
-
-
-@pytest.mark.parametrize("value", ["2025-02-29", "01/02/2025", "46000", "2025/01.31", "2025-01-31T25:00"])
-def test_invalid_or_ambiguous_release_dates(csv_settings, value):
-    name, _ = write_csv(csv_settings, f"far,sample,Release Date\n001,002,{value}\n")
-    result = load_csv(csv_settings, name)
-    assert result["error_count"] == 1
-    assert result["valid_rows"] == 0
-    assert result["errors"][0]["line"] == 2
-    assert "Release Date" in result["errors"][0]["message"]
+    assert result["rows"][0]["values"]["release_date"] == value
 
 
 @pytest.mark.parametrize("blank_mode", ["omit", "null"])

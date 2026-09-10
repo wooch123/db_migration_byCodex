@@ -4,9 +4,8 @@ import csv
 import hashlib
 import io
 import os
-import re
 import stat
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 
@@ -168,20 +167,6 @@ def _decode(raw: bytes) -> tuple[str, str]:
     raise CsvImportError("CSV를 UTF-8 또는 CP949로 읽을 수 없습니다. 저장 인코딩을 확인하세요.")
 
 
-def _release_date(value: str) -> str:
-    parts = re.fullmatch(r"(\d{4})([-/.])(\d{1,2})\2(\d{1,2})", value)
-    try:
-        if parts:
-            return date(int(parts[1]), int(parts[3]), int(parts[4])).isoformat()
-        if re.match(r"^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}", value):
-            return datetime.fromisoformat(value).date().isoformat()
-    except ValueError:
-        pass
-    raise ValueError(
-        "Release Date는 유효한 YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD 또는 ISO 날짜·시간이어야 합니다."
-    )
-
-
 def _parse(content: str, settings: Settings, blank_mode: str) -> dict:
     # csv's field limit is process-wide. Serialize our readers while temporarily
     # increasing it so a long EXT_CSD value can use the configured file allowance.
@@ -254,11 +239,6 @@ def _parse_rows(content: str, max_rows: int, blank_mode: str) -> dict:
                         row_errors.append(f"필수 값 {target}가 비어 있습니다.")
                     values[target] = value
                 elif value:
-                    if target == "release_date":
-                        try:
-                            value = _release_date(value)
-                        except ValueError as exc:
-                            row_errors.append(str(exc))
                     values[target] = value
                 elif blank_mode == "null":
                     values[target] = None

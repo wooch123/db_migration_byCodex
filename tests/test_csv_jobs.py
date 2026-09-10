@@ -56,7 +56,7 @@ async def test_csv_validation_uses_frozen_input_without_api_or_tls_initializatio
         "far_no": "FAR-1",
         "sample_no": "0001",
         "name": "홍길동",
-        "release_date": "2025-01-02",
+        "release_date": "2025/01/02",
     }
     for table in ("deliveries", "http_exchanges", "mock_target", "chunks"):
         assert store.one(f"SELECT COUNT(*) n FROM {table}")["n"] == 0
@@ -70,8 +70,9 @@ async def test_csv_insert_skip_and_subset_patch_preserve_other_server_fields(set
     original = json.loads(store.one("SELECT payload FROM mock_target WHERE record_key=?", (key,))["payload"])
     path = write_csv(
         settings,
-        "far,sample,담당자,F/W,EXT_CSD(eMMC Only)\n"
-        "FAR-20250101-0000,S001,홍길동,001.02,0000ABCDEF\nNEW-FAR,0002,김철수,002.01,000F\n",
+        "far,sample,담당자,F/W,EXT_CSD(eMMC Only),Release Date\n"
+        "FAR-20250101-0000,S001,홍길동,001.02,0000ABCDEF,미정 / RC2\n"
+        "NEW-FAR,0002,김철수,002.01,000F,2025-02-29\n",
     )
     first = await run_csv(settings, store, path)
     assert first["status"] == "completed" and first["succeeded"] == 2
@@ -86,8 +87,15 @@ async def test_csv_insert_skip_and_subset_patch_preserve_other_server_fields(set
     patch = json.loads(store.exchange(exchanges[1]["id"])["details"]["request"]["body"])
     assert patch == {
         "where": {"far_no": "FAR-20250101-0000", "sample_no": "S001"},
-        "values": {"name": "홍길동", "firmware": "001.02", "ext_csd": "0000ABCDEF"},
+        "values": {
+            "name": "홍길동",
+            "firmware": "001.02",
+            "ext_csd": "0000ABCDEF",
+            "release_date": "미정 / RC2",
+        },
     }
+    post = json.loads(store.exchange(exchanges[2]["id"])["details"]["request"]["body"])
+    assert post["values"]["release_date"] == "2025-02-29"
     saved = json.loads(store.one("SELECT payload FROM mock_target WHERE record_key=?", (key,))["payload"])
     assert saved == {**original, **patch["values"]}
     repeated = await run_csv(settings, store, path)
@@ -184,18 +192,21 @@ async def test_uncertain_delivery_blocks_other_source_for_same_business_key(
 
 
 def test_csv_web_preview_snapshot_retry_after_source_deleted_and_export(settings):
-    path = write_csv(settings, "far,sample,담당자,F/W\nF1,001,원래 담당자,FW1\n")
+    path = write_csv(settings, "far,sample,담당자,F/W,Release Date\nF1,001,원래 담당자,FW1,출시 일정 미정\n")
     app = create_app(settings)
     with TestClient(app, base_url="http://localhost") as client:
         listing = client.get("/api/csv/files")
         assert listing.status_code == 200
         assert [row["name"] for row in listing.json()["files"]] == [path.name]
         preview = client.post("/api/csv/preview", json={"filename": path.name}).json()
+        assert preview["error_count"] == 0
+        assert preview["rows"][0]["values"]["release_date"] == "출시 일정 미정"
         queued = client.post(
             "/api/csv/jobs", json={"filename": path.name, "sha256": preview["sha256"], "dry_run": False}
         )
         assert queued.status_code == 202
         job_id = queued.json()["id"]
+        assert app.state.store.csv_snapshot(job_id)["rows"] == preview["rows"]
         assert client.post(f"/api/jobs/{job_id}/retry", json={}).status_code == 409
         path.unlink()
         settings.mock_scenario = "target_error"
@@ -213,7 +224,13 @@ def test_csv_web_preview_snapshot_retry_after_source_deleted_and_export(settings
         exported = client.get(f"/api/jobs/{retry_id}/export")
         assert exported.status_code == 200
         assert json.loads(exported.text)["request"] == {
-            "values": {"far_no": "F1", "sample_no": "001", "name": "원래 담당자", "firmware": "FW1"}
+            "values": {
+                "far_no": "F1",
+                "sample_no": "001",
+                "name": "원래 담당자",
+                "firmware": "FW1",
+                "release_date": "출시 일정 미정",
+            }
         }
 
 

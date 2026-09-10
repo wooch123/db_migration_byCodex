@@ -81,7 +81,7 @@ TARGET_BASE_URL=https://estgtask.samsungds.net
 
 프로젝트에 `csv/` 폴더를 제공합니다. [CSV 입력 양식](examples/far_import_template.csv)을 복사해 `far`, `sample`과 필요한 값을 채운 뒤 웹의 **CSV 가져오기**에서 파일을 선택하세요. 미리보기로 헤더·값·오류를 확인한 후 검증 또는 API 전송을 실행할 수 있습니다. 기본값은 빈 셀을 전송에서 제외해 기존 서버 값을 유지하는 방식입니다.
 
-이 기능은 CSV 필드만 전송하며 Claim·제품 API를 조회하지 않습니다. 입력 파일은 Git에 업로드하지 않습니다. 전체 컬럼 매핑, 빈칸·날짜 처리, `run.bat csv-import` 및 Ubuntu 사용 방법은 [CSV 가져오기 안내](docs/csv-import.md)를 참고하세요.
+이 기능은 CSV 필드만 전송하며 Claim·제품 API를 조회하지 않습니다. `Release Date`도 텍스트로 전송합니다. 입력 파일은 Git에 업로드하지 않습니다. 전체 컬럼 매핑, 빈칸·텍스트 처리, `run.bat csv-import` 및 Ubuntu 사용 방법은 [CSV 가져오기 안내](docs/csv-import.md)를 참고하세요.
 
 ## API 주소 및 사내망 전환
 
