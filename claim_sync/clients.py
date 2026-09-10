@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import json
+import re
 import ssl
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,6 +25,45 @@ class OversizedResponse(UpstreamError):
 
 class AmbiguousDelivery(UpstreamError):
     pass
+
+
+class DuplicateTarget(UpstreamError):
+    """The create was explicitly rejected for the FAR/sample composite key."""
+
+
+def duplicate_target(body: str) -> bool:
+    # Both the error code and column names must match. A generic 400 or a different
+    # UNIQUE constraint must never cause an update to an existing record.
+    try:
+        result = json.loads(body)
+    except (ValueError, RecursionError):
+        return False
+    if not isinstance(result, dict) or result.get("ok") is not False:
+        return False
+    error = result.get("error")
+    if not isinstance(error, dict):
+        return False
+    code = error.get("code")
+    if not isinstance(code, str) or re.sub(r"\s+", "", code.upper()) not in {
+        "CREATE_FAIELD,UNIQUE",
+        "CREATE_FAILED,UNIQUE",
+    }:
+        return False
+    for name in ("massage", "message"):
+        message = error.get(name)
+        if not isinstance(message, str):
+            continue
+        match = re.fullmatch(r"UNIQUE\s+constraint\s+failed:\s*(.+)", message.strip(), re.IGNORECASE)
+        if not match:
+            continue
+        columns = [column.strip().lower() for column in match[1].split(",")]
+        if (
+            len(columns) == 2
+            and all(re.fullmatch(r"far_tabl(?:e)?\.(?:far_no|sample_no)", column) for column in columns)
+            and {column.split(".")[1] for column in columns} == {"far_no", "sample_no"}
+        ):
+            return True
+    return False
 
 
 def at_path(value, path: str):
@@ -302,25 +343,48 @@ class APIClients:
             raise UpstreamError(
                 "실제 전송 잠금: ALLOW_LIVE_WRITES 및 TARGET_UPSERT_CONFIRMED 설정을 확인하세요."
             )
+        try:
+            await self._write("POST", {"values": values}, fingerprint, record_key=record_key)
+        except DuplicateTarget as exc:
+            where = {field: values.get(field) for field in ("far_no", "sample_no")}
+            if any(not isinstance(value, str) or not value.strip() for value in where.values()):
+                raise UpstreamError(
+                    f"{exc}\nPATCH 수정 조건인 far_no와 sample_no가 모두 필요합니다. 수정 요청은 보내지 않았습니다."
+                ) from exc
+            updates = {field: value for field, value in values.items() if field not in where}
+            if not updates:
+                raise UpstreamError(
+                    f"{exc}\nPATCH로 수정할 컬럼이 없습니다. 수정 요청은 보내지 않았습니다."
+                ) from exc
+            self.event("info", "patch", f"{exc}\n동일한 far_no·sample_no의 기존 행을 PATCH로 갱신합니다.")
+            # A server may share its idempotency cache across methods. PATCH must not
+            # reuse the rejected POST's response or request fingerprint.
+            patch_key = hashlib.sha256(f"{fingerprint}:PATCH".encode()).hexdigest()
+            await self._write("PATCH", {"where": where, "values": updates}, patch_key, record_key=record_key)
+
+    async def _write(self, method: str, payload: dict, operation_key: str, *, record_key=None):
+        s = self.settings
         headers = dict(s.target_headers)
         if s.target_idempotency_header:
-            headers[s.target_idempotency_header] = fingerprint
-        request = self.client.build_request("POST", s.target_url, headers=headers)
+            headers[s.target_idempotency_header] = operation_key
+        request = self.client.build_request(method, s.target_url, headers=headers)
+        label = "수정 전송" if method == "PATCH" else "전송"
         try:
-            # POST is never retried automatically: a lost response may follow a committed write.
+            # Neither write method is retried after an uncertain response. Only the
+            # explicitly rejected duplicate POST may transition once to PATCH.
             async with self.exchange(
-                "FAR 전송",
-                "POST",
+                "FAR 수정" if method == "PATCH" else "FAR 전송",
+                method,
                 s.target_url,
                 headers=headers,
-                json={"values": values},
+                json=payload,
                 record_key=record_key,
             ) as (response, log):
                 request = response.request
                 if response.status_code >= 500 or response.status_code in {202, 408, 429}:
                     raise AmbiguousDelivery(
                         self.diagnostics.message(
-                            "전송",
+                            label,
                             request,
                             "수신 여부를 운영 서버에서 확인하세요. 자동 재전송 보류.",
                             response=response,
@@ -328,20 +392,26 @@ class APIClients:
                         )
                     )
                 if not 200 <= response.status_code < 300:
-                    raise UpstreamError(
+                    preview = await self.error_preview(response, log)
+                    rejection = (
+                        DuplicateTarget
+                        if method == "POST" and response.status_code == 400 and duplicate_target(preview)
+                        else UpstreamError
+                    )
+                    raise rejection(
                         self.diagnostics.message(
-                            "전송 거절",
+                            f"{label} 거절",
                             request,
                             f"HTTP {response.status_code}",
                             response=response,
-                            body=await self.error_preview(response, log),
+                            body=preview,
                         )
                     )
 
                 def uncertain(detail, body=None):
                     return AmbiguousDelivery(
                         self.diagnostics.message(
-                            "전송",
+                            label,
                             request,
                             detail,
                             response=response,
@@ -365,7 +435,9 @@ class APIClients:
                     raise uncertain(
                         "전송 후 JSON 확인 응답을 해석할 수 없습니다.", data.decode("utf-8", errors="replace")
                     ) from exc
-                if isinstance(body, dict) and (body.get("success") is False or body.get("error")):
+                if isinstance(body, dict) and (
+                    body.get("success") is False or body.get("ok") is False or body.get("error")
+                ):
                     raise uncertain(
                         "전송 응답에 애플리케이션 오류가 있습니다. 반영 여부 확인 필요", json.dumps(body)
                     )
@@ -379,6 +451,6 @@ class APIClients:
         except httpx.TransportError as exc:
             raise AmbiguousDelivery(
                 self.diagnostics.message(
-                    "전송", request, f"{type(exc).__name__}: {exc}\n자동 재전송을 보류했습니다."
+                    label, request, f"{type(exc).__name__}: {exc}\n자동 재전송을 보류했습니다."
                 )
             ) from exc

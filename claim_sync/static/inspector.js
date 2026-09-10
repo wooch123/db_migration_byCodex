@@ -136,8 +136,8 @@ function renderLegacy(original) {
     `<section class="trace-original"><h3>이전 전송의 원래 오류</h3><p>실행 #${esc(original.job_id.slice(0, 8))} · ${formatDate(original.updated_at)}</p>
     <p>이전 버전의 보관 기록입니다. 저장되지 않은 HTTP 응답 코드·본문은 복원할 수 없습니다.</p>
     <pre>${esc(original.error)}</pre>${original.exchange_id ? '<button class="button secondary small" id="inspect-original">원래 요청·응답 열기 →</button>' : ""}</section>` +
-    traceBlock("기존 전송 대상", `POST ${original.url}`) +
-    traceBlock("이전 실행의 POST 데이터", original.request_body,
+    traceBlock("기존 전송 대상", `${original.method || "POST"} ${original.url}`) +
+    traceBlock(`이전 실행의 ${original.method || "POST"} 데이터`, original.request_body,
       original.body_truncated ? '<p class="trace-body-note">저장 한도에 따라 본문 일부만 표시합니다.</p>' : "");
   $("copy-http-detail").disabled = false;
   $("download-http-detail").disabled = false;
@@ -162,11 +162,11 @@ async function loadHTTPDetail(id) {
       <p>기록 #${row.id} · ${row.job_id ? `실행 #${esc(row.job_id.slice(0, 8))}` : "연결 확인"}${row.record_key ? ` · ${esc(row.record_key)}` : ""}</p></div>` +
     (original ? `<section class="trace-original"><h3>원래 전송에서 발생한 오류</h3><p>실행 #${esc(original.job_id.slice(0, 8))} · ${formatDate(original.updated_at)}</p>
       <pre>${esc(original.error)}</pre>${original.exchange_id ? '<button class="button secondary small" id="inspect-original">원래 요청·응답 열기 →</button>' : '<p>이전 버전에서 HTTP 상세를 저장하지 않았습니다. 남아 있는 원래 오류와 전송 데이터를 표시합니다.</p>'}
-      ${traceBlock("이전 실행의 POST 데이터", original.request_body, original.body_truncated ? '<p class="trace-body-note">본문 일부만 표시합니다.</p>' : "", false)}</section>` : "") +
+      ${traceBlock(`이전 실행의 ${original.method || "POST"} 데이터`, original.request_body, original.body_truncated ? '<p class="trace-body-note">본문 일부만 표시합니다.</p>' : "", false)}</section>` : "") +
     (d.error ? traceBlock("오류 상세", d.error) : "") +
     traceBlock(row.state === "blocked" ? "이번에 보내려던 요청 URL" : "요청 URL", `${req.method} ${req.url}`) +
     traceBlock("GET / URL 조회 조건", queryText, "", !!req.query.length) +
-    traceBlock(row.state === "blocked" ? "보류한 POST 데이터 (미전송)" : "POST 요청 데이터", req.body || (req.method === "GET" ? "GET 요청은 본문 없이 위 URL 조회 조건으로 전달했습니다." : "(빈 본문)"), bodyNote(req, true), req.method !== "GET") +
+    traceBlock(row.state === "blocked" ? `보류한 ${req.method} 데이터 (미전송)` : `${req.method} 요청 데이터`, req.body || (req.method === "GET" ? "GET 요청은 본문 없이 위 URL 조회 조건으로 전달했습니다." : "(빈 본문)"), bodyNote(req, true), req.method !== "GET") +
     traceBlock("요청 헤더", JSON.stringify(req.headers, null, 2), "", false) +
     (res ? traceBlock("실제 서버 응답 본문", res.body || "(빈 응답 본문)", bodyNote(res)) +
       traceBlock("서버 응답 헤더", JSON.stringify(res.headers, null, 2), "", false)

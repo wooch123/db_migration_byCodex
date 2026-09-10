@@ -56,8 +56,10 @@ let state = null,
   initialized = false,
   polling = false,
   authRequired = false,
-  resolving = null,
+  resolving = false,
   unresolved = [];
+const selectedUnresolved = new Map();
+let unresolvedLoadVersion = 0, unresolvedSignature = "";
 let token = sessionStorage.getItem("claim-sync-token") || "";
 let toastTimer;
 let payloadTraceContext = null;
@@ -431,15 +433,72 @@ function openPayload(payload, error, context = null) {
   $("payload-dialog").showModal();
 }
 async function loadUnresolved() {
-  unresolved = await api("/api/deliveries/unresolved");
-  $("unresolved-list").innerHTML = unresolved.length
-    ? unresolved
-        .map(
-          (d, index) =>
-            `<article class="card attention-card"><div class="card-heading"><h2 class="mono">${esc(d.record_key)}</h2>${badge(d.status)}</div><p>${esc(d.note || "전송 진행 중")}<br>${esc(d.destination)}<br>마지막 변경 ${formatDate(d.updated_at)}</p><div class="inline-buttons"><button class="button secondary small" data-unresolved-payload="${index}">전송 값 확인</button><button class="button secondary small" data-unresolved-trace="${index}">원래 요청·응답</button><button class="button primary small" data-resolve="${index}" ${d.status === "sending" ? "disabled" : ""}>반영 여부 기록</button></div></article>`,
-        )
-        .join("")
-    : '<div class="card table-empty">전송 확인을 기다리는 항목이 없습니다.</div>';
+  const version = ++unresolvedLoadVersion;
+  const next = await api("/api/deliveries/unresolved");
+  if (version !== unresolvedLoadVersion) return;
+  unresolved = next;
+  let changedSelection = false;
+  for (const [key, updatedAt] of selectedUnresolved) {
+    if (!unresolved.some((d) => unresolvedKey(d) === key && d.can_resolve && d.updated_at === updatedAt)) {
+      selectedUnresolved.delete(key);
+      changedSelection = true;
+    }
+  }
+  const signature = JSON.stringify(unresolved);
+  if (signature !== unresolvedSignature) {
+    unresolvedSignature = signature;
+    $("unresolved-list").innerHTML = unresolved.length
+      ? unresolved.map((d, index) =>
+          `<article class="card attention-card"><div class="card-heading"><label class="checkbox unresolved-choice"><input type="checkbox" data-unresolved-select="${index}" aria-label="${esc(d.record_key)} 선택"><strong class="mono">${esc(d.record_key)}</strong></label>${badge(d.status)}</div><p>${esc(d.note || "전송 진행 중")}<br>${esc(d.destination)}<br>마지막 변경 ${formatDate(d.updated_at)}${d.can_resolve ? "" : "<br>작업이 종료된 뒤 확인 처리할 수 있습니다."}</p><div class="inline-buttons"><button class="button secondary small" data-unresolved-payload="${index}">전송 값 확인</button><button class="button secondary small" data-unresolved-trace="${index}">원래 요청·응답</button></div></article>`,
+        ).join("")
+      : '<div class="card table-empty">전송 확인을 기다리는 항목이 없습니다.</div>';
+  }
+  updateResolutionSelection();
+  if (changedSelection && !resolving) toast("상태가 변경된 항목의 선택을 해제했습니다. 내용을 다시 확인하세요.");
+}
+function unresolvedKey(item) {
+  return JSON.stringify([item.destination, item.record_key]);
+}
+function updateResolutionSelection() {
+  const available = unresolved.filter((d) => d.can_resolve);
+  const count = selectedUnresolved.size;
+  $("resolve-selected-count").textContent = resolving ? `${number(count)}건 처리 중…` : `${number(count)}건 선택`;
+  $("resolve-applied").disabled = resolving || !count;
+  $("resolve-not-applied").disabled = resolving || !count;
+  const all = $("unresolved-select-all");
+  all.disabled = resolving || !available.length;
+  all.checked = available.length > 0 && count === available.length;
+  all.indeterminate = count > 0 && count < available.length;
+  document.querySelectorAll("[data-unresolved-select]").forEach((checkbox) => {
+    const item = unresolved[Number(checkbox.dataset.unresolvedSelect)];
+    checkbox.checked = selectedUnresolved.has(unresolvedKey(item));
+    checkbox.disabled = resolving || !item.can_resolve;
+    checkbox.closest(".attention-card").classList.toggle("is-selected", checkbox.checked);
+  });
+}
+async function resolveSelected(result) {
+  if (resolving || !selectedUnresolved.size) return;
+  const items = unresolved.filter((d) => d.can_resolve && selectedUnresolved.has(unresolvedKey(d))).map((d) => ({
+    record_key: d.record_key,
+    destination: d.destination,
+    expected_updated_at: selectedUnresolved.get(unresolvedKey(d)),
+  }));
+  resolving = true;
+  ++unresolvedLoadVersion;
+  updateResolutionSelection();
+  try {
+    const response = await api("/api/deliveries/resolve-selected", "POST", { items, result });
+    selectedUnresolved.clear();
+    toast(`${number(response.resolved)}건을 ${result === "applied" ? "반영 완료" : "미반영"} 처리했습니다. ${result === "applied" ? "" : "다음 동기화에서 다시 전송할 수 있습니다."}`);
+    await loadUnresolved();
+    await refresh();
+  } catch (error) {
+    toast(error.message, true);
+    try { await loadUnresolved(); } catch { /* Keep the original processing error visible. */ }
+  } finally {
+    resolving = false;
+    updateResolutionSelection();
+  }
 }
 document
   .querySelectorAll("[data-view]")
@@ -577,33 +636,23 @@ $("unresolved-list").addEventListener("click", (e) => {
     const item = unresolved[Number(p.dataset.unresolvedPayload)];
     openPayload(item.payload, item.note, { jobId: item.job_id, recordKey: item.record_key });
   }
-  const r = e.target.closest("[data-resolve]");
-  if (r) {
-    resolving = unresolved[Number(r.dataset.resolve)];
-    $("resolve-key").textContent = resolving.record_key;
-    $("resolve-result").value = "";
-    $("resolve-note").value = "";
-    $("resolve-dialog").showModal();
-  }
 });
-$("resolve-form").addEventListener("submit", (e) => {
-  e.preventDefault();
-  if (!$("resolve-result").value) {
-    toast("서버 확인 결과를 선택하세요.", true);
-    return;
-  }
-  action(e.submitter, async () => {
-    await api("/api/deliveries/resolve", "POST", {
-      record_key: resolving.record_key,
-      destination: resolving.destination,
-      result: $("resolve-result").value,
-      note: $("resolve-note").value,
-    });
-    $("resolve-dialog").close();
-    toast("확인 결과를 저장했습니다.");
-    await refresh();
-  });
+$("unresolved-list").addEventListener("change", (event) => {
+  const checkbox = event.target.closest("[data-unresolved-select]");
+  if (!checkbox || resolving) return;
+  const item = unresolved[Number(checkbox.dataset.unresolvedSelect)];
+  if (item.can_resolve && checkbox.checked) selectedUnresolved.set(unresolvedKey(item), item.updated_at);
+  else selectedUnresolved.delete(unresolvedKey(item));
+  updateResolutionSelection();
 });
+$("unresolved-select-all").addEventListener("change", (event) => {
+  if (resolving) return;
+  selectedUnresolved.clear();
+  if (event.target.checked) unresolved.filter((d) => d.can_resolve).forEach((d) => selectedUnresolved.set(unresolvedKey(d), d.updated_at));
+  updateResolutionSelection();
+});
+$("resolve-applied").addEventListener("click", () => resolveSelected("applied"));
+$("resolve-not-applied").addEventListener("click", () => resolveSelected("not_applied"));
 const mapping = [
   ["far_no", "Claim · farNo", "문자열"],
   ["sample_no", "Claim · sampleNo", "문자열"],

@@ -12,23 +12,25 @@ from .store import encode, utcnow
 
 def previous_delivery(store, diagnostics, delivery, limit):
     original = store.one(
-        """SELECT id FROM http_exchanges WHERE job_id=? AND record_key=? AND method='POST'
+        """SELECT id FROM http_exchanges WHERE job_id=? AND record_key=? AND method IN ('POST','PATCH')
         AND state!='blocked' ORDER BY id DESC LIMIT 1""",
         (delivery["job_id"], delivery["record_key"]),
     )
     url = delivery["destination"].split("|")[1]
     request = httpx.Request("POST", url, json={"values": json.loads(delivery["payload"])})
     safe_url, clean, _ = diagnostics.cleaner(request)
+    saved = store.exchange(original["id"])["details"]["request"] if original else None
     return {
         "job_id": delivery["job_id"],
         "record_key": delivery["record_key"],
         "updated_at": delivery["updated_at"],
-        "url": safe_url,
+        "url": saved["url"] if saved else safe_url,
+        "method": saved["method"] if saved else "POST",
         "error": clean(delivery["note"] or "이전 실행에서 상세 오류를 저장하지 않았습니다."),
-        "request_body": diagnostics.body_text(
-            request, request.content[:limit].decode("utf-8", errors="replace")
-        ),
-        "body_truncated": len(request.content) > limit,
+        "request_body": saved["body"]
+        if saved
+        else diagnostics.body_text(request, request.content[:limit].decode("utf-8", errors="replace")),
+        "body_truncated": saved["body_truncated"] if saved else len(request.content) > limit,
         "exchange_id": original["id"] if original else None,
     }
 

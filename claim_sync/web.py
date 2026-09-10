@@ -25,7 +25,18 @@ class Resolution(BaseModel):
     record_key: str
     destination: str
     result: Literal["applied", "not_applied"]
-    note: str = Field(min_length=5, max_length=1000)
+    expected_updated_at: str | None = None
+
+
+class ResolutionSelection(BaseModel):
+    record_key: str
+    destination: str
+    expected_updated_at: str = Field(min_length=1)
+
+
+class SelectedResolution(BaseModel):
+    items: list[ResolutionSelection] = Field(min_length=1, max_length=100)
+    result: Literal["applied", "not_applied"]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -317,40 +328,76 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/deliveries/unresolved")
     def unresolved():
         rows = store.query(
-            "SELECT * FROM deliveries WHERE status IN ('uncertain','sending') ORDER BY updated_at DESC LIMIT 100"
+            """SELECT d.*, j.status AS job_status FROM deliveries d
+            LEFT JOIN jobs j ON j.id=d.job_id
+            WHERE d.status IN ('uncertain','sending') ORDER BY d.updated_at DESC LIMIT 100"""
         )
         for row in rows:
             row["payload"] = json.loads(row["payload"])
+            row["can_resolve"] = row["status"] == "uncertain" and row["job_status"] != "running"
         return rows
+
+    def resolve_deliveries(items: list[Resolution | ResolutionSelection], result: str):
+        keys = {(item.destination, item.record_key) for item in items}
+        if len(keys) != len(items):
+            raise HTTPException(422, "같은 항목을 여러 번 선택할 수 없습니다.")
+        note = (
+            "운영자가 목록에서 서버 반영 완료로 확인했습니다."
+            if result == "applied"
+            else "운영자가 목록에서 서버 미반영으로 확인했습니다. 다음 동기화에서 다시 전송할 수 있습니다."
+        )
+        with store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            deliveries = []
+            for item in items:
+                delivery = db.execute(
+                    "SELECT * FROM deliveries WHERE destination=? AND record_key=?",
+                    (item.destination, item.record_key),
+                ).fetchone()
+                if not delivery or delivery["status"] != "uncertain":
+                    raise HTTPException(
+                        409, "선택 항목의 상태가 변경되었습니다. 목록을 확인하고 다시 선택하세요."
+                    )
+                if item.expected_updated_at and item.expected_updated_at != delivery["updated_at"]:
+                    raise HTTPException(
+                        409, "선택한 이후 전송 정보가 변경되었습니다. 목록을 확인하고 다시 선택하세요."
+                    )
+                active = db.execute(
+                    "SELECT 1 FROM jobs WHERE id=? AND status='running'", (delivery["job_id"],)
+                ).fetchone()
+                if active:
+                    raise HTTPException(409, "해당 작업이 종료된 후 확인 처리하세요.")
+                deliveries.append(delivery)
+            timestamp = utcnow()
+            for delivery in deliveries:
+                db.execute(
+                    "UPDATE deliveries SET status=?,note=?,updated_at=? WHERE destination=? AND record_key=?",
+                    (
+                        "success" if result == "applied" else "failed",
+                        note,
+                        timestamp,
+                        delivery["destination"],
+                        delivery["record_key"],
+                    ),
+                )
+                db.execute(
+                    "INSERT INTO events(job_id,time,level,step,message) VALUES(?,?,?,?,?)",
+                    (
+                        delivery["job_id"],
+                        timestamp,
+                        "warning",
+                        "reconcile",
+                        f"운영자 반영 확인: {result} · {delivery['record_key']} · {note} (API 전송 없음)",
+                    ),
+                )
+        return {"ok": True, "resolved": len(items), "result": result}
 
     @app.post("/api/deliveries/resolve")
     def resolve(body: Resolution):
-        with store.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            delivery = db.execute(
-                "SELECT * FROM deliveries WHERE destination=? AND record_key=?",
-                (body.destination, body.record_key),
-            ).fetchone()
-            if not delivery or delivery["status"] != "uncertain":
-                raise HTTPException(409, "확인 대기 상태의 항목만 처리할 수 있습니다.")
-            active = db.execute(
-                "SELECT 1 FROM jobs WHERE id=? AND status='running'", (delivery["job_id"],)
-            ).fetchone()
-            if active:
-                raise HTTPException(409, "해당 작업이 종료된 후 확인 처리하세요.")
-            db.execute(
-                "UPDATE deliveries SET status=?,note=?,updated_at=? WHERE destination=? AND record_key=?",
-                (
-                    "success" if body.result == "applied" else "failed",
-                    body.note,
-                    utcnow(),
-                    body.destination,
-                    body.record_key,
-                ),
-            )
-        store.event(
-            delivery["job_id"], "warning", "reconcile", f"운영자 반영 확인: {body.result} · {body.note}"
-        )
-        return {"ok": True}
+        return resolve_deliveries([body], body.result)
+
+    @app.post("/api/deliveries/resolve-selected")
+    def resolve_selected(body: SelectedResolution):
+        return resolve_deliveries(body.items, body.result)
 
     return app

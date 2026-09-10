@@ -111,7 +111,6 @@ def test_reconcile_ambiguous_delivery_without_resending(settings, spec):
                 "record_key": delivery["record_key"],
                 "destination": delivery["destination"],
                 "result": "applied",
-                "note": "가상 대상 DB 값 대조 완료",
             },
         )
         assert response.status_code == 200

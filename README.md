@@ -47,7 +47,7 @@ Python 3.11 이상이 없으면 Windows는 **winget으로 Python 3.12 설치**, 
 1. 최근 N개월 또는 시작일·종료일을 선택합니다.
 2. 한 번에 조회할 일 수를 정합니다. 예: 7일.
 3. **전송 없이 검증**으로 실행하고 데이터 미리보기에서 21개 전송 필드를 확인합니다.
-4. 운영 전송 설정을 완료한 뒤 **API 전송**으로 실행하면 실제 FAR API로 POST합니다. 이미 전송한 동일한 데이터는 `변경 없음`으로 표시됩니다.
+4. 운영 전송 설정을 완료한 뒤 **API 전송**으로 실행하면 실제 FAR API로 POST합니다. 서버가 `far_no + sample_no` 중복을 반환하면 같은 주소에 PATCH로 기존 행을 수정합니다. 이미 전송한 동일한 데이터는 `변경 없음`으로 표시됩니다.
 5. 자동 갱신 화면에서 간격을 정하고 사용을 켠 후 저장합니다. 대시보드의 현재 기간·조회 단위·실행 방식이 함께 저장됩니다.
 
 상단의 **LIVE 환경** 표시와 **API 연결 및 매핑** 화면에서 실제 접속 주소를 확인하세요. 조회 실패는 화면과 작업 로그에 표시되며 가상 데이터로 대체하지 않습니다. `.env` 변경은 프로세스를 재시작해야 반영됩니다. 환경변수는 `.env`보다 우선합니다.
@@ -68,10 +68,10 @@ TARGET_BASE_URL=https://estgtask.samsungds.net
 - 하루에도 한도에 도달하면 해당 날짜를 **전송하지 않고 실패로 기록**. 페이지네이션 없는 API에서 임의로 완전 수집됐다고 판단하지 않습니다.
 - 제품 schema 검증, Part ID 앞 15자 조회, 한 실행 안에서 최대 4,096개 제품 캐시.
 - ISO 날짜 정규화, NAND/DRAM 조합, Part ID 좌측 15자 전송, 레코드별 검증.
-- 우측 요청·응답 패널: GET 조건, POST JSON, 실제 응답 코드·본문·헤더·소요 시간, 이전 전송 오류 연결, 복사·JSON 저장. 인증 값은 가리며 본문 저장 한도는 `HTTP_LOG_BODY_BYTES`로 설정합니다.
+- 우측 요청·응답 패널: GET 조건, POST/PATCH JSON, 실제 응답 코드·본문·헤더·소요 시간, 이전 전송 오류 연결, 복사·JSON 저장. 인증 값은 가리며 본문 저장 한도는 `HTTP_LOG_BODY_BYTES`로 설정합니다.
 - SQLite에 작업·구간·레코드·이벤트·스케줄·성공 전송 상태 저장.
-- 동일 업무 키와 동일 전송 값은 건너뛰고 변경된 값은 다시 POST.
-- GET 재시도, POST 응답 유실 보류, 운영자 반영 확인 화면, 실행 중지 및 재실행.
+- 동일 업무 키와 동일 전송 값은 건너뛰고 변경된 값은 다시 POST. 지정된 중복 응답일 때 PATCH로 전환.
+- GET 재시도, POST/PATCH 응답 유실 보류, 목록에서 체크해 반영됨·미반영을 처리하는 확인 화면, 실행 중지 및 재실행.
 - 자동 갱신, 프로세스 중복 실행 방지, 중단 이력 복구, 웹 없는 CLI 실행.
 - 실시간 상태/로그(2초 갱신), 실행 이력, 필터·페이지별 레코드, JSON 미리보기, NDJSON 내보내기.
 - 선택적 접속 토큰, 동일 출처 검사, 인증 헤더 비노출, TLS 검증.
@@ -100,7 +100,7 @@ ALLOW_LIVE_WRITES=false
 TARGET_UPSERT_CONFIRMED=false
 ```
 
-처음에는 `live`에서 **전송 없이 검증**을 실행하세요. 다음 계약은 실제 응답이 제공되지 않아 사내에서 확인해야 합니다.
+처음에는 `live`에서 **전송 없이 검증**을 실행하세요. 제공받은 API 계약과 아래 처리 규칙이 실제 응답에 맞는지 사내에서 확인하세요.
 
 | 확인 항목 | 구현의 기본 가정 |
 | --- | --- |
@@ -109,12 +109,16 @@ TARGET_UPSERT_CONFIRMED=false
 | Claim 응답 | 배열 또는 `data/items/records/results/claims` 래퍼. 사용자 지정 점 경로 지원 |
 | 제품 응답 | 단일 객체 또는 `data/record/result/records/items` 래퍼, 1개짜리 배열 |
 | 제품 schema | JSON Schema `properties` 또는 `fields/columns` 배열. [응답 계약 문서](docs/api-contracts.md) 참조 |
-| 업무 키 | `far_no + sample_no`. `TARGET_KEY_FIELDS`로 설정 가능 |
-| 반복 POST 의미 | 서버가 같은 업무 키를 **upsert**해야 변경 건 갱신 가능 |
+| 업무 키 | 로컬 중복 확인은 `TARGET_KEY_FIELDS`로 설정 가능. PATCH의 `where`는 서버 계약에 따라 항상 `far_no + sample_no` |
+| 기존 행 갱신 | POST의 HTTP 400 중 지정된 두 키의 UNIQUE 오류일 때 같은 URL로 PATCH 1회 |
 | 빈 선택 필드 | JSON `null`로 전송. 필수 키·접수일·Part ID는 비어 있으면 실패 |
 | 성공 확인 | 오류 없는 2xx 응답(202 제외). 필요 시 `TARGET_SUCCESS_PATH`와 JSON `TARGET_SUCCESS_VALUE` 지정 |
 
-**POST URL만으로 서버의 insert/update 동작을 알 수는 없습니다.** 서버가 insert 전용이면 이 클라이언트만으로 기존 행을 갱신할 수 없습니다. 업무 키에 대한 upsert 또는 별도의 갱신 API 계약을 먼저 확정해야 합니다. 확인 후 `.env`에서 `ALLOW_LIVE_WRITES=true`, `TARGET_UPSERT_CONFIRMED=true`로 설정하면 운영 전송을 사용할 수 있습니다.
+POST가 HTTP 400과 `ok:false`, `error.code="CREATE_FAIELD, UNIQUE"`, `error.massage="UNIQUE constraint failed: far_tabl.far_no, far_table.sample_no"`를 반환하면 PATCH로 전환합니다. 정상 철자인 `CREATE_FAILED`, `message`, `far_table`도 지원합니다. PATCH의 `where`에는 두 키를 넣고 `values`에는 나머지 19개 필드 전체를 `null`까지 포함해 보냅니다. 다른 400 오류는 수정 요청으로 바꾸지 않습니다. [정확한 요청·응답 규칙](docs/api-contracts.md#4-post-중복-시-patch-수정)을 참고하세요.
+
+POST와 PATCH는 모두 `.env`의 `TARGET_BASE_URL`, `TARGET_PATH`, `TARGET_HEADERS`, TLS/CA 설정을 사용합니다. 기존 전송 조건인 `ALLOW_LIVE_WRITES=true`, `TARGET_UPSERT_CONFIRMED=true`도 유지합니다. `TARGET_UPSERT_CONFIRMED`는 서버의 POST·PATCH 갱신 계약 확인을 뜻하며, POST 자체가 upsert여야 한다는 뜻은 아닙니다.
+
+**전송 확인 대기**에서는 서버와 값을 대조한 항목을 체크하고 **선택 항목 반영 완료** 또는 **선택 항목 미반영**으로 처리합니다. 사유 입력은 필요하지 않습니다. 미반영 처리는 다음 수동·예약 실행에서 재전송을 허용하며, 버튼을 누르는 순간 API로 재전송하지는 않습니다.
 
 전송 대상·모드·업무 키·데이터셋이 바뀌면 이전 대기 작업을 다른 대상으로 보내지 않습니다. 새 작업을 등록하고 스케줄을 다시 저장하세요. 대상 DB를 초기화했거나 tenant가 바뀌면 `TARGET_DATASET_ID`도 바꾸세요.
 
@@ -143,7 +147,7 @@ PFX 원본·개인키·암호는 앱 설정에 넣지 않습니다. 변환 도�
 - 스케줄 저장 시 첫 실행은 현재 시각 + 간격입니다. 즉시 실행은 대시보드 버튼을 사용하세요.
 - 긴 실행 중 예약 시각이 여러 번 지나가면 쌓아두지 않고 종료 후 한 번 실행합니다. 서버가 꺼져 있던 기간도 한 번으로 합칩니다.
 - 재실행은 같은 설정의 새 작업입니다. 상대 기간은 다시 계산되고 이미 성공한 동일 값은 건너뜁니다. 실패·중단된 작업을 임의로 자동 재개하지 않습니다.
-- 기록은 전체 작업 기준 원자적이지 않습니다. 일부 구간 실패/취소 전에 완료한 POST는 유지됩니다.
+- 기록은 전체 작업 기준 원자적이지 않습니다. 일부 구간 실패/취소 전에 완료한 POST/PATCH는 유지됩니다.
 - UI를 닫아도 프로세스가 살아 있으면 계속 실행됩니다. 프로세스까지 종료해도 계속 실행하려면 Ubuntu 서비스를 등록하세요.
 
 ## Ubuntu 백그라운드 실행

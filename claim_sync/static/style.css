@@ -1092,6 +1092,47 @@ td small {
   padding: 22px;
   margin-bottom: 16px;
 }
+.attention-card.is-selected {
+  border-color: #77984c;
+  box-shadow: 0 0 0 1px #77984c;
+}
+.resolution-toolbar {
+  padding: 18px 22px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 24px;
+}
+.resolution-selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  flex: 1 1 230px;
+}
+.resolution-selection .checkbox,
+.unresolved-choice {
+  margin: 0;
+}
+.unresolved-choice {
+  min-width: 0;
+}
+.unresolved-choice input {
+  flex: 0 0 16px;
+}
+.unresolved-choice strong {
+  font-size: 13px;
+  min-width: 0;
+}
+.resolution-toolbar .help {
+  flex-basis: 100%;
+  margin: 0;
+}
+#resolve-selected-count {
+  color: var(--muted);
+  font-size: 12px;
+}
 .attention-card p {
   font-size: 11px;
   line-height: 1.9;
@@ -1179,8 +1220,7 @@ pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-#auth-dialog,
-#resolve-dialog {
+#auth-dialog {
   width: 470px;
 }
 dialog form > p {

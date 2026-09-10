@@ -1,7 +1,9 @@
+import json
 from datetime import date, timedelta
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from .config import Settings
 from .mapping import PRODUCT_FIELDS
@@ -81,19 +83,53 @@ def create_mock_app(settings: Settings, store: Store) -> FastAPI:
     async def target(request: Request):
         body = await request.json()
         values = body.get("values", {})
-        key = encode([values.get(field) for field in settings.target_key_fields])
+        key = encode([values.get(field) for field in ("far_no", "sample_no")])
         if settings.mock_scenario == "target_error":
             raise HTTPException(422, "Mock validation rejection")
-        if not values.get("far_no"):
-            raise HTTPException(422, "far_no is required")
-        store.execute(
-            """INSERT INTO mock_target VALUES(?,?,?) ON CONFLICT(record_key)
-            DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at""",
-            (key, encode(values), utcnow()),
-        )
+        if not values.get("far_no") or not values.get("sample_no"):
+            raise HTTPException(422, "far_no and sample_no are required")
+        with store.connect() as db:
+            inserted = db.execute(
+                "INSERT INTO mock_target VALUES(?,?,?) ON CONFLICT(record_key) DO NOTHING",
+                (key, encode(values), utcnow()),
+            ).rowcount
+        if not inserted:
+            # Match the supplied server contract, including its spelling mistakes.
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "error": {
+                        "code": "CREATE_FAIELD, UNIQUE",
+                        "massage": "UNIQUE constraint failed: far_tabl.far_no, far_table.sample_no",
+                    },
+                },
+            )
         if settings.mock_scenario == "target_timeout":
             # Commit then lose the response to exercise ambiguous-delivery recovery.
             raise httpx.ReadTimeout("Mock response lost after commit")
-        return {"success": True, "operation": "upsert", "key": key}
+        return {"ok": True, "success": True, "operation": "insert", "key": key}
+
+    @app.patch(settings.target_path)
+    async def patch_target(request: Request):
+        body = await request.json()
+        where, values = body.get("where"), body.get("values")
+        if not isinstance(where, dict) or set(where) != {"far_no", "sample_no"} or not all(where.values()):
+            raise HTTPException(422, "Both far_no and sample_no conditions are required")
+        if not isinstance(values, dict) or not values or {"far_no", "sample_no"} & values.keys():
+            raise HTTPException(422, "Non-key update values are required")
+        key = encode([where["far_no"], where["sample_no"]])
+        with store.connect() as db:
+            row = db.execute("SELECT payload FROM mock_target WHERE record_key=?", (key,)).fetchone()
+            if not row:
+                raise HTTPException(404, "No record matches both conditions")
+            updated = {**json.loads(row["payload"]), **values}
+            db.execute(
+                "UPDATE mock_target SET payload=?,updated_at=? WHERE record_key=?",
+                (encode(updated), utcnow(), key),
+            )
+        if settings.mock_scenario == "target_timeout":
+            raise httpx.ReadTimeout("Mock PATCH response lost after commit")
+        return {"ok": True, "success": True, "operation": "update", "key": key, "updated": 1}
 
     return app

@@ -485,6 +485,17 @@
               </p>
             </div>
           </div>
+          <div class="card resolution-toolbar">
+            <div class="resolution-selection">
+              <label class="checkbox"><input id="unresolved-select-all" type="checkbox" disabled>현재 목록 전체 선택</label>
+              <span id="resolve-selected-count" role="status" aria-live="polite">0건 선택</span>
+            </div>
+            <div class="inline-buttons">
+              <button id="resolve-applied" class="button primary small" disabled>선택 항목 반영 완료</button>
+              <button id="resolve-not-applied" class="button secondary small" disabled>선택 항목 미반영</button>
+            </div>
+            <p class="help">선택한 항목의 확인 결과를 바로 저장합니다. 미반영 항목은 다음 동기화에서 다시 전송할 수 있으며, 여기서는 API를 전송하지 않습니다.</p>
+          </div>
           <div id="unresolved-list"></div>
         </section>
         <footer>
@@ -551,41 +562,6 @@
           autocomplete="current-password"
           required
         /><button class="button primary full" type="submit">연결</button>
-      </form>
-    </dialog>
-    <dialog id="resolve-dialog">
-      <form id="resolve-form">
-        <div class="dialog-heading">
-          <h2>전송 결과 확인</h2>
-          <button
-            type="button"
-            class="icon-button"
-            data-close="resolve-dialog"
-            aria-label="닫기"
-          >
-            ×
-          </button>
-        </div>
-        <p id="resolve-key" class="mono"></p>
-        <label for="resolve-result">운영 서버 대조 결과</label
-        ><select id="resolve-result">
-          <option value="">확인 결과를 선택하세요</option>
-          <option value="applied">전송한 값이 모두 반영됨</option>
-          <option value="not_applied">전송한 값이 반영되지 않음</option></select
-        ><label for="resolve-note">확인 근거</label
-        ><textarea
-          id="resolve-note"
-          minlength="5"
-          maxlength="1000"
-          required
-          placeholder="확인한 데이터와 근거를 5자 이상 기록하세요."
-        ></textarea>
-        <p class="help">
-          미반영으로 기록하면 다음 동기화 때 다시 전송할 수 있습니다.
-        </p>
-        <button class="button primary full" type="submit">
-          확인 결과 저장
-        </button>
       </form>
     </dialog>
   </body>
