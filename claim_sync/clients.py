@@ -2,6 +2,7 @@ import asyncio
 import json
 import ssl
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import quote
 
 import httpx
@@ -120,11 +121,22 @@ class APIClients:
             from .mock import create_mock_app
 
             transport = httpx.ASGITransport(app=create_mock_app(settings, store))
-        verify = (
-            ssl.create_default_context(cafile=settings.ca_bundle)
-            if settings.ca_bundle
-            else settings.tls_verify
-        )
+        verify = settings.tls_verify
+        if settings.ca_bundle:
+            if Path(settings.ca_bundle).suffix.lower() in {".pfx", ".p12"}:
+                raise UpstreamError(
+                    "CA_BUNDLE에는 PEM 형식의 CA 인증서가 필요합니다. "
+                    "Windows에서 export-ca.bat로 PFX/P12의 CA 인증서를 추출한 뒤 "
+                    "CA_BUNDLE=certs/corporate-ca.pem으로 지정하고 재시작하세요."
+                )
+            try:
+                verify = ssl.create_default_context(cafile=settings.ca_bundle)
+            except (OSError, ValueError) as exc:
+                raise UpstreamError(
+                    f"CA_BUNDLE 인증서를 읽을 수 없습니다: {settings.ca_bundle}\n"
+                    f"원인: {type(exc).__name__}: {exc}\n"
+                    "PEM 파일 경로, 읽기 권한과 CA 인증서 내용을 확인하세요."
+                ) from exc
         self.client = httpx.AsyncClient(
             timeout=settings.http_timeout_seconds,
             verify=verify,

@@ -9,3 +9,8 @@ __pycache__
 .ruff_cache
 *.egg-info
 tests
+certs
+**/*.pfx
+**/*.p12
+**/*.pem
+**/*.key

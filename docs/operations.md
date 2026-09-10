@@ -184,6 +184,43 @@ sudo systemctl restart claim-sync-worker.service claim-sync-web.service
 - HTTPX는 기본적으로 환경 프록시를 사용하지 않습니다. 사내 정책상 필요할 때만 `TRUST_ENV_PROXY=true`와 프록시 환경변수를 사용하세요.
 - 기본 `live` 모드는 설정된 API로 HTTP 요청을 보냅니다. `APP_MODE=mock`을 별도로 지정한 개발·테스트 환경만 내장 가상 API를 사용합니다.
 
+### PFX 형식의 사내 CA 인증서
+
+`unable to get local issuer certificate`는 서버 인증서의 발급자를 신뢰 체인에서 찾지 못했다는 뜻입니다. 사내 CA를 PFX/P12로 받은 경우 공개 CA 인증서를 PEM으로 추출해 `CA_BUNDLE`에 지정합니다. 확장자만 `.pem`으로 바꾸는 방법은 지원하지 않습니다.
+
+1. 최신 코드를 내려받은 프로젝트에서 `export-ca.bat`를 더블클릭합니다. 또는 PowerShell에서 `.\export-ca.bat "C:\인증서\corporate-ca.pfx"`로 실행합니다.
+2. PFX 파일 경로와 암호를 입력합니다. 암호는 화면에 표시하지 않습니다. 암호가 없으면 Enter를 누릅니다. 암호를 명령행·`.env`·대화에 기록할 필요가 없습니다.
+3. 기본 결과는 프로젝트의 `certs/corporate-ca.pem`입니다. `.env`에 아래 두 값을 지정합니다.
+4. 웹 앱과 worker를 재시작합니다. 기존 SSL 오류 기록은 그대로 보존되며 이후 요청에 새 인증서 설정을 적용합니다.
+
+```dotenv
+TLS_VERIFY=true
+CA_BUNDLE=certs/corporate-ca.pem
+```
+
+임의 위치에 저장하려면 두 번째 인자로 경로를 지정하세요. 기존 PEM을 갱신할 때는 `-Force`를 붙입니다. 변환이 실패하면 기존 PEM은 유지합니다.
+
+```powershell
+.\export-ca.bat "C:\인증서\corporate-ca.pfx" "C:\인증서\corporate-ca.pem"
+.\export-ca.bat "C:\인증서\renewed-ca.pfx" -Force
+```
+
+공백이 있는 경로는 따옴표로 감쌉니다. `.env`에 Windows 절대 경로를 넣을 때는 `CA_BUNDLE="C:/인증서/corporate-ca.pem"`처럼 `/`를 사용하면 편합니다. 상대 경로는 프로세스의 작업 폴더 기준이며 제공 실행 파일은 프로젝트 폴더에서 앱을 시작합니다. 변환 도구는 실제로 사용할 절대 경로도 출력합니다.
+
+도구는 PFX에 포함된 **Basic Constraints의 CA=true인 인증서**를 중복 없이 추출합니다. 루트 CA와 중간 CA를 포함하고, 일반 서버/클라이언트 인증서는 제외합니다. 공개 X.509 데이터만 PEM으로 저장하며 개인키는 내보내지 않습니다. PFX를 여는 동안 키가 있다면 [Microsoft의 EphemeralKeySet](https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.x509certificates.x509keystorageflags?view=netframework-4.8.1)으로 메모리에서만 읽습니다. 인증서 저장소·실행 정책·`.env`는 변경하지 않습니다. Python 패키지와 OpenSSL 설치, 관리자 권한이 필요하지 않습니다. Windows PowerShell 5.1과 .NET Framework 4.7.2 이상이 필요하며 PowerShell 7에서는 `scripts/export_ca.ps1`을 직접 실행할 수도 있습니다.
+
+| 변환/연결 결과 | 조치 |
+| --- | --- |
+| `Cannot open PFX` | 암호, 파일 손상, Windows에서 지원하는 PFX 암호화 형식을 확인합니다. 암호가 맞아도 구형 Windows에서 읽지 못하면 인증서 담당자에게 공개 CA PEM을 요청하세요. |
+| `No CA certificates` | PFX에 CA=true인 인증서가 없습니다. 루트·중간 CA가 포함된 파일 또는 공개 CA PEM을 요청하세요. |
+| `Output already exists` | 다른 출력 파일을 지정하거나 인증서 갱신 시 `-Force`를 붙입니다. |
+| PowerShell 실행 정책으로 스크립트 차단 | 사내 정책에 맞게 서명된 스크립트를 사용하거나 인증서 담당자에게 공개 CA PEM을 받습니다. 도구는 정책을 해제하지 않습니다. |
+| 변환 후에도 인증서 오류 | 설정 경로·재시작 여부·인증서 만료와 실제 서버 발급자에 맞는 루트/중간 CA가 모두 있는지 확인합니다. 도구는 빠진 인증서를 인터넷에서 자동 수집하지 않습니다. |
+
+`certs/`, `*.pfx`, `*.p12`, `*.pem`, `*.key`는 Git 업로드 대상에서 제외합니다. 생성된 PEM은 Ubuntu에도 그대로 복사할 수 있으며, 서비스 계정이 읽을 수 있는 경로에 두고 `CA_BUNDLE=/etc/claim-sync/corporate-ca.pem`처럼 지정하세요. PFX와 암호를 Ubuntu로 옮길 필요는 없습니다. Docker에서는 PEM을 읽기 전용으로 마운트합니다.
+
+인증서를 설정해도 기존 **전송 확인 대기** 항목은 자동 재전송하지 않습니다. 원래 요청·응답과 서버 반영 여부를 확인하고 웹의 전송 확인 대기 목록에서 결과를 기록한 뒤 재실행하세요.
+
 ## Docker
 
 ```bash
@@ -279,7 +316,7 @@ content-type: application/json
 | 하루치 limit 도달 | API 담당자에게 pagination/시각 단위/더 높은 검증된 한도 요청 |
 | HTTP 400/422 | 오류의 요청 URL·조회 조건과 서버 응답의 필드 오류 확인. 전송 오류는 해당 레코드의 전송 JSON과 비교 |
 | HTTP 401/403 | 각 API의 인증 헤더와 계정 권한 확인 |
-| 인증서 오류 | 사내 CA bundle 경로와 신뢰 체인 확인 |
+| 인증서 오류 | 사내 CA bundle 경로와 신뢰 체인 확인. PFX/P12는 `export-ca.bat`로 공개 CA PEM을 추출한 뒤 지정 |
 | 확인 대기 | 대상 DB에서 업무 키와 모든 전송 값을 대조하고 웹에서 결과 기록 |
 | 대상 값이 외부에서 변경됨 | 로컬 ledger만으로 대상 변경을 감지할 수 없음. `TARGET_DATASET_ID` 변경 후 재동기화 |
 | 프로세스 재시작 후 interrupted | 이전 작업 이력은 보존. 확인 대기 해소 후 수동 재실행 또는 다음 예약 실행 |

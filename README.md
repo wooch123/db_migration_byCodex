@@ -118,6 +118,23 @@ TARGET_UPSERT_CONFIRMED=false
 
 전송 대상·모드·업무 키·데이터셋이 바뀌면 이전 대기 작업을 다른 대상으로 보내지 않습니다. 새 작업을 등록하고 스케줄을 다시 저장하세요. 대상 DB를 초기화했거나 tenant가 바뀌면 `TARGET_DATASET_ID`도 바꾸세요.
 
+### 사내 CA 인증서가 PFX인 경우
+
+Windows에서 `export-ca.bat`를 더블클릭해 PFX 파일 경로와 암호를 입력하거나 다음처럼 실행하세요. 암호는 숨김 입력하며, 암호가 없으면 Enter를 누릅니다. Python·OpenSSL·추가 패키지 설치 없이 Windows 기본 PowerShell/.NET을 사용합니다.
+
+```powershell
+.\export-ca.bat "C:\인증서\corporate-ca.pfx"
+```
+
+PFX에서 **공개 CA 인증서만** 프로젝트의 `certs/corporate-ca.pem`으로 추출합니다. `.env`를 아래처럼 수정하고 `run.bat` 또는 worker를 재시작하세요.
+
+```dotenv
+TLS_VERIFY=true
+CA_BUNDLE=certs/corporate-ca.pem
+```
+
+PFX 원본·개인키·암호는 앱 설정에 넣지 않습니다. 변환 도구는 Windows 인증서 저장소를 변경하지 않으며, `certs/`와 인증서·키 파일은 Git 및 Docker 빌드에서 제외합니다. Ubuntu에서도 생성한 PEM을 복사해 `CA_BUNDLE` 경로만 맞추면 됩니다. 인증서 갱신·오류 조치는 [PFX CA 인증서 설정](docs/operations.md#pfx-형식의-사내-ca-인증서)을 참고하세요.
+
 ## 날짜·재실행·스케줄 의미
 
 - `최근 1개월`: 실행일이 2026-09-09이면 **2026-08-09 ~ 2026-09-09**, 양끝 포함. 30일 고정이 아닌 달력 기준이며 월말은 이전 달 마지막 날로 보정합니다.

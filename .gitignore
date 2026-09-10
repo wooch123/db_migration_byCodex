@@ -15,3 +15,8 @@ artifacts/
 node_modules/
 .claim-sync-setup.lock
 wheelhouse/
+certs/
+*.pfx
+*.p12
+*.pem
+*.key
