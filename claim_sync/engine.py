@@ -50,7 +50,7 @@ class Engine:
                 f"{start} ~ {end} · {spec.chunk_days}일 단위 · {'전송 없이 검증' if spec.dry_run else 'API 전송'}",
             )
             cache = OrderedDict()
-            async with APIClients(self.settings, self.store, log, self.transport) as api:
+            async with APIClients(self.settings, self.store, log, self.transport, job_id=job_id) as api:
                 await api.schema()
                 log("info", "schema", "제품 schema의 필수 8개 필드를 확인했습니다.")
                 for lower, upper in chunks(start, end, spec.chunk_days):
@@ -194,9 +194,7 @@ class Engine:
             if spec.dry_run:
                 status = "validated"
             elif delivery and delivery["status"] in {"sending", "uncertain"}:
-                raise AmbiguousDelivery(
-                    "이 업무 키의 이전 전송 결과가 불확실합니다. 전송 확인 대기 목록에서 반영 여부를 확인하세요."
-                )
+                raise AmbiguousDelivery(api.blocked(values, key, delivery))
             elif delivery and delivery["status"] == "success" and delivery["fingerprint"] == fingerprint:
                 status = "skipped"
             else:
@@ -207,7 +205,7 @@ class Engine:
                 try:
                     # A new operation key for A -> B -> A avoids reusing an old idempotent response.
                     operation_key = hashlib.sha256(f"{fingerprint}:{job_id}".encode()).hexdigest()
-                    await api.send(values, operation_key)
+                    await api.send(values, operation_key, record_key=key)
                 except (AmbiguousDelivery, asyncio.CancelledError) as exc:
                     self.store.save_delivery(
                         self.settings.destination,

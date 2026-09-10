@@ -56,6 +56,7 @@ def map_record(claim: dict, product: dict) -> dict:
     if missing:
         raise ValueError(f"제품 응답의 필수 필드 누락: {', '.join(sorted(missing))}")
     values = {dest: scalar(claim.get(src), src) for dest, src in STRING_MAPPING.items()}
+    values["part_id"] = part_prefix(claim)
     values.update({dest: normalized_date(claim.get(src), src) for dest, src in DATE_MAPPING.items()})
     for field in ("far_no", "sample_no", "rcv_date", "part_id"):
         if not values[field] or not str(values[field]).strip():

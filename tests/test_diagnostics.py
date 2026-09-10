@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from claim_sync.clients import AmbiguousDelivery, APIClients, UpstreamError
-from claim_sync.diagnostics import ERROR_BODY_BYTES, RequestDiagnostics
+from claim_sync.diagnostics import RequestDiagnostics
 from claim_sync.engine import Engine
 from claim_sync.mapping import PRODUCT_FIELDS
 from claim_sync.web import create_app
@@ -151,7 +151,7 @@ async def test_error_preview_bounded_and_truncation_marked(settings, store):
     async with APIClients(settings, store, lambda *_: None, transport) as api:
         with pytest.raises(UpstreamError) as error:
             await api.claims("2025-01-01", "2025-01-02")
-    assert len(reads) <= ERROR_BODY_BYTES // 1024 + 1
+    assert len(reads) <= settings.http_log_body_bytes // 1024 + 1
     assert len(str(error.value)) < 5000
     assert "[응답 일부 생략]" in str(error.value)
 

@@ -11,7 +11,7 @@ ERROR_TEXT_CHARS = 4096
 REDACTED = "[REDACTED]"
 SECRET_KEY = r"[\w-]*(?:token|secret|password|passwd|authorization|cookie|api[_-]?key|credential)[\w-]*"
 SECRET_ASSIGNMENT = re.compile(
-    rf"""(?i)(["']?{SECRET_KEY}["']?\s*[:=]\s*)(?:"[^"\n]*(?:"|$)|'[^'\n]*(?:'|$)|[^\s,;&<>}}]+)"""
+    rf"""(?i)(?<![\w-])(["']?{SECRET_KEY}["']?\s*[:=]\s*)(?:"[^"\n]*(?:"|$)|'[^'\n]*(?:'|$)|[^\s,;&<>}}]+)"""
 )
 
 
@@ -39,7 +39,7 @@ class RequestDiagnostics:
     def __init__(self, *header_sets: dict):
         self.secrets = set().union(*(secret_values(headers, configured=True) for headers in header_sets))
 
-    def message(self, label, request, detail, *, response=None, body=None):
+    def cleaner(self, request):
         secrets = self.secrets | secret_values(dict(request.headers))
         # Keep the actual encoded path, query order and repeated parameters intact.
         url = request.url.copy_with(username=None, password=None, fragment=None)
@@ -80,6 +80,18 @@ class RequestDiagnostics:
                 return [clean_json(item) for item in value]
             return value
 
+        return clean(url), clean, clean_json
+
+    def body_text(self, request, text):
+        _, clean, clean_json = self.cleaner(request)
+        try:
+            text = json.dumps(clean_json(json.loads(text)), ensure_ascii=False, indent=2)
+        except (ValueError, RecursionError):
+            pass
+        return clean(text)
+
+    def message(self, label, request, detail, *, response=None, body=None):
+        url, clean, _ = self.cleaner(request)
         lines = [clean(f"{label}: {detail}"), f"요청: {request.method} {clean(url)}"]
         if response is not None:
             lines.append(f"상태: HTTP {response.status_code} {clean(response.reason_phrase)}")
@@ -87,24 +99,22 @@ class RequestDiagnostics:
                 if response.headers.get(key):
                     lines.append(f"{key}: {clean(response.headers[key])[:512]}")
         if body is not None:
-            try:
-                body = json.dumps(clean_json(json.loads(body)), ensure_ascii=False, indent=2)
-            except (ValueError, RecursionError):
-                pass
-            body = clean(body)
+            body = self.body_text(request, body)
             if len(body) > ERROR_TEXT_CHARS:
                 body = body[:ERROR_TEXT_CHARS] + "\n[응답 일부 생략]"
             lines.append("서버 응답:\n" + (body or "(빈 응답)"))
         return "\n".join(lines)
 
 
-async def error_body(response: httpx.Response) -> str:
+async def error_body(response: httpx.Response, *, limit=ERROR_BODY_BYTES, capture=None) -> str:
     """Read only a bounded error preview; a broken body must not hide a known HTTP status."""
     data = bytearray()
     suffix = ""
     try:
         async for chunk in response.aiter_bytes(chunk_size=1024):
-            remaining = ERROR_BODY_BYTES - len(data)
+            if capture:
+                capture(chunk)
+            remaining = limit - len(data)
             data.extend(chunk[:remaining])
             if len(chunk) > remaining:
                 suffix = "\n[응답 일부 생략]"

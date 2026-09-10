@@ -11,6 +11,7 @@
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/style.css" />
     <script src="/static/app.js" defer></script>
+    <script src="/static/inspector.js" defer></script>
   </head>
   <body>
     <aside class="sidebar">
@@ -66,6 +67,7 @@
           ><span id="breadcrumb">동기화 대시보드</span>
         </div>
         <div class="topbar-right">
+          <button class="button secondary small" id="open-inspector" aria-controls="http-inspector" aria-expanded="false">요청·응답 로그</button>
           <span id="env-badge" class="badge">연결 중</span
           ><span class="avatar">OP</span>
         </div>
@@ -283,6 +285,7 @@
               <div id="job-error" class="notice danger compact" hidden></div>
               <div class="log-heading">
                 <h3>실행 로그</h3>
+                <button class="text-button" id="inspect-job">요청·응답 상세 →</button>
                 <label class="checkbox"
                   ><input type="checkbox" id="errors-only" />오류만 보기</label
                 >
@@ -490,6 +493,28 @@
         </footer>
       </main>
     </div>
+    <aside id="http-inspector" class="http-inspector" aria-label="API 요청·응답 상세" hidden>
+      <div class="inspector-heading">
+        <div><span class="eyebrow">HTTP HISTORY</span><h2>요청·응답 상세</h2></div>
+        <button class="icon-button" id="close-inspector" aria-label="요청·응답 패널 닫기">×</button>
+      </div>
+      <div class="inspector-controls">
+        <label for="inspector-scope">조회 범위</label>
+        <select id="inspector-scope"><option value="selected">선택한 실행</option><option value="all">전체 실행</option><option value="checks">API 연결 확인</option></select>
+        <div class="inspector-options">
+          <label class="checkbox"><input id="inspector-errors" type="checkbox" />실패·보류만</label>
+          <label class="checkbox"><input id="inspector-follow" type="checkbox" checked />최신 요청 따라가기</label>
+          <button class="text-button" id="inspector-reset">필터 초기화</button>
+        </div>
+        <p id="inspector-context" class="help">실행을 선택하면 요청 이력이 표시됩니다.</p>
+        <div id="inspector-error" class="notice danger compact" hidden></div>
+      </div>
+      <div id="http-request-list" class="http-request-list" aria-label="HTTP 요청 목록"></div>
+      <div class="inspector-pagination"><span id="inspector-count">0건</span><button class="text-button" id="inspector-prev">이전</button><button class="text-button" id="inspector-next">다음</button></div>
+      <div class="inspector-detail-toolbar"><h3>선택한 요청</h3><button class="text-button" id="toggle-http-list" aria-expanded="true">목록 접기</button><button class="text-button" id="copy-http-detail" disabled>전체 복사</button><button class="text-button" id="download-http-detail" disabled>JSON 저장</button></div>
+      <div id="http-request-detail" class="http-request-detail"><p class="inspector-empty">요청을 선택하면 URL, 전송 데이터와 실제 서버 응답을 확인할 수 있습니다.</p></div>
+      <p class="inspector-footnote">인증정보는 가립니다. 큰 본문은 저장 한도와 생략 여부를 표시합니다.</p>
+    </aside>
     <div id="toast" class="toast" role="status" hidden></div>
     <dialog id="payload-dialog">
       <div class="dialog-heading">
@@ -508,6 +533,7 @@
       <div id="payload-error" class="notice danger compact" hidden></div>
       <pre id="payload-code"></pre>
       <div class="dialog-footer">
+        <button class="button secondary" id="inspect-payload">요청 이력 보기</button>
         <button class="button secondary" id="copy-payload">JSON 복사</button
         ><button class="button primary" data-close="payload-dialog">
           확인

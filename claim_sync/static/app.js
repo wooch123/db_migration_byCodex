@@ -60,6 +60,7 @@ let state = null,
   unresolved = [];
 let token = sessionStorage.getItem("claim-sync-token") || "";
 let toastTimer;
+let payloadTraceContext = null;
 const esc = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -364,6 +365,7 @@ async function loadRecords(jobId = selectedJob) {
 }
 async function selectJob(id) {
   selectedJob = id;
+  if (typeof resetInspector === "function") resetInspector();
   offset = 0;
   events = [];
   $("record-filter").value = "";
@@ -395,6 +397,7 @@ async function refresh() {
       if (currentView === "dashboard") await loadRecords(id);
     }
     if (currentView === "attention") await loadUnresolved();
+    if (typeof refreshInspector === "function") await refreshInspector();
   } catch (error) {
     if (!authRequired) {
       $("connection-error").hidden = false;
@@ -415,7 +418,9 @@ async function action(button, callback) {
     button.disabled = false;
   }
 }
-function openPayload(payload, error) {
+function openPayload(payload, error, context = null) {
+  payloadTraceContext = context;
+  $("inspect-payload").hidden = !context;
   $("payload-code").textContent = JSON.stringify(
     payload ? { values: payload } : null,
     null,
@@ -431,7 +436,7 @@ async function loadUnresolved() {
     ? unresolved
         .map(
           (d, index) =>
-            `<article class="card attention-card"><div class="card-heading"><h2 class="mono">${esc(d.record_key)}</h2>${badge(d.status)}</div><p>${esc(d.note || "전송 진행 중")}<br>${esc(d.destination)}<br>마지막 변경 ${formatDate(d.updated_at)}</p><div class="inline-buttons"><button class="button secondary small" data-unresolved-payload="${index}">전송 값 확인</button><button class="button primary small" data-resolve="${index}" ${d.status === "sending" ? "disabled" : ""}>반영 여부 기록</button></div></article>`,
+            `<article class="card attention-card"><div class="card-heading"><h2 class="mono">${esc(d.record_key)}</h2>${badge(d.status)}</div><p>${esc(d.note || "전송 진행 중")}<br>${esc(d.destination)}<br>마지막 변경 ${formatDate(d.updated_at)}</p><div class="inline-buttons"><button class="button secondary small" data-unresolved-payload="${index}">전송 값 확인</button><button class="button secondary small" data-unresolved-trace="${index}">원래 요청·응답</button><button class="button primary small" data-resolve="${index}" ${d.status === "sending" ? "disabled" : ""}>반영 여부 기록</button></div></article>`,
         )
         .join("")
     : '<div class="card table-empty">전송 확인을 기다리는 항목이 없습니다.</div>';
@@ -492,7 +497,7 @@ $("records-body").addEventListener("click", (e) => {
   const b = e.target.closest("[data-record]");
   if (b) {
     const row = rows[Number(b.dataset.record)];
-    openPayload(row.payload, row.error);
+    openPayload(row.payload, row.error, { jobId: selectedJob, recordKey: row.record_key });
   }
 });
 $("history-list").addEventListener("click", (e) => {
@@ -531,6 +536,7 @@ $("check-api").addEventListener("click", () =>
     showView("connections");
     $("check-results").textContent = "조회 API 연결을 확인하고 있습니다…";
     const result = await api("/api/check", "POST");
+    openInspector(null, null, "checks");
     $("check-results").innerHTML = Object.entries(result)
       .map(
         ([key, value]) =>
@@ -569,7 +575,7 @@ $("unresolved-list").addEventListener("click", (e) => {
   const p = e.target.closest("[data-unresolved-payload]");
   if (p) {
     const item = unresolved[Number(p.dataset.unresolvedPayload)];
-    openPayload(item.payload, item.note);
+    openPayload(item.payload, item.note, { jobId: item.job_id, recordKey: item.record_key });
   }
   const r = e.target.closest("[data-resolve]");
   if (r) {
@@ -606,7 +612,7 @@ const mapping = [
   ["cust_name", "Claim · custName", "문자열"],
   ["fail_loc", "Claim · failLoc", "문자열"],
   ["fail_symptom", "Claim · failSymptom", "문자열"],
-  ["part_id", "Claim · partId", "원본 전체 문자열 보존"],
+  ["part_id", "Claim · partId", "좌측 15자만 전송"],
   ["failmode1", "Claim · failMode1", "문자열"],
   ["failmode2", "Claim · failMode2", "문자열"],
   ["comp_wc", "Claim · shippingWeekCode", "문자열"],

@@ -1,12 +1,14 @@
 import asyncio
 import json
 import ssl
+from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 import httpx
 
 from .config import Settings
 from .diagnostics import RequestDiagnostics, error_body
+from .http_log import HTTPExchange, previous_delivery
 from .mapping import PRODUCT_FIELDS
 
 
@@ -107,8 +109,9 @@ def schema_fields(body) -> set[str]:
 
 
 class APIClients:
-    def __init__(self, settings: Settings, store, event, transport=None):
+    def __init__(self, settings: Settings, store, event, transport=None, *, job_id=None):
         self.settings = settings
+        self.store, self.job_id = store, job_id
         self.event = event
         self.diagnostics = RequestDiagnostics(
             settings.claims_headers, settings.product_headers, settings.target_headers
@@ -136,11 +139,67 @@ class APIClients:
     async def __aexit__(self, *_):
         await self.client.aclose()
 
+    @asynccontextmanager
+    async def exchange(self, label, method, url, *, attempt=1, record_key=None, **kwargs):
+        request = self.client.build_request(method, url, **kwargs)
+        log = HTTPExchange(
+            self.store,
+            self.diagnostics,
+            request,
+            job_id=self.job_id,
+            record_key=record_key,
+            stage=label,
+            attempt=attempt,
+            limit=self.settings.http_log_body_bytes,
+        )
+        response = None
+        try:
+            response = await self.client.send(request, stream=True)
+            log.receive(response)
+            yield response, log
+        except BaseException as exc:
+            log.finish(exc)
+            raise
+        else:
+            log.finish()
+        finally:
+            if response is not None:
+                await response.aclose()
+
+    async def error_preview(self, response, log):
+        return await error_body(response, limit=self.settings.http_log_body_bytes, capture=log.capture)
+
+    def blocked(self, values, record_key, delivery):
+        request = self.client.build_request("POST", self.settings.target_url, json={"values": values})
+        log = HTTPExchange(
+            self.store,
+            self.diagnostics,
+            request,
+            job_id=self.job_id,
+            record_key=record_key,
+            stage="이전 전송 확인 필요",
+            attempt=0,
+            limit=self.settings.http_log_body_bytes,
+        )
+        log.details["original"] = previous_delivery(
+            self.store, self.diagnostics, delivery, self.settings.http_log_body_bytes
+        )
+        message = (
+            "이 업무 키의 이전 전송 결과가 불확실하여 이번 POST는 보내지 않았습니다.\n"
+            f"업무 키: {record_key}\n이전 실행: {delivery['job_id']} · {delivery['updated_at']}\n"
+            f"원래 오류: {log.details['original']['error']}\n"
+            "우측 요청·응답 상세에서 이전 기록을 확인하고 전송 확인 대기 목록에 반영 여부를 기록하세요."
+        )
+        log.finish(UpstreamError(message), state="blocked")
+        return message
+
     async def get(self, label: str, url: str, headers: dict, params=None):
         request = self.client.build_request("GET", url, headers=headers, params=params)
         for attempt in range(self.settings.get_retries + 1):
             try:
-                async with self.client.stream("GET", url, headers=headers, params=params) as response:
+                async with self.exchange(
+                    label, "GET", url, headers=headers, params=params, attempt=attempt + 1
+                ) as (response, log):
                     request = response.request
                     if not 200 <= response.status_code < 300:
                         message = self.diagnostics.message(
@@ -148,7 +207,7 @@ class APIClients:
                             request,
                             f"HTTP {response.status_code}",
                             response=response,
-                            body=await error_body(response),
+                            body=await self.error_preview(response, log),
                         )
                     if response.status_code in {408, 429, 500, 502, 503, 504}:
                         raise httpx.HTTPStatusError(message, request=request, response=response)
@@ -156,6 +215,7 @@ class APIClients:
                         raise UpstreamError(message)
                     data = bytearray()
                     async for chunk in response.aiter_bytes():
+                        log.capture(chunk)
                         data.extend(chunk)
                         if len(data) > self.settings.max_response_bytes:
                             raise OversizedResponse(
@@ -224,7 +284,7 @@ class APIClients:
         body = await self.get("제품 정보", s.product_base_url.rstrip("/") + path, s.product_headers)
         return product_record(body, s.product_records_path)
 
-    async def send(self, values: dict, fingerprint: str):
+    async def send(self, values: dict, fingerprint: str, *, record_key=None):
         s = self.settings
         if not s.can_write:
             raise UpstreamError(
@@ -236,9 +296,14 @@ class APIClients:
         request = self.client.build_request("POST", s.target_url, headers=headers)
         try:
             # POST is never retried automatically: a lost response may follow a committed write.
-            async with self.client.stream(
-                "POST", s.target_url, headers=headers, json={"values": values}
-            ) as response:
+            async with self.exchange(
+                "FAR 전송",
+                "POST",
+                s.target_url,
+                headers=headers,
+                json={"values": values},
+                record_key=record_key,
+            ) as (response, log):
                 request = response.request
                 if response.status_code >= 500 or response.status_code in {202, 408, 429}:
                     raise AmbiguousDelivery(
@@ -247,7 +312,7 @@ class APIClients:
                             request,
                             "수신 여부를 운영 서버에서 확인하세요. 자동 재전송 보류.",
                             response=response,
-                            body=await error_body(response),
+                            body=await self.error_preview(response, log),
                         )
                     )
                 if not 200 <= response.status_code < 300:
@@ -257,7 +322,7 @@ class APIClients:
                             request,
                             f"HTTP {response.status_code}",
                             response=response,
-                            body=await error_body(response),
+                            body=await self.error_preview(response, log),
                         )
                     )
 
@@ -274,6 +339,7 @@ class APIClients:
 
                 data = bytearray()
                 async for chunk in response.aiter_bytes():
+                    log.capture(chunk)
                     data.extend(chunk)
                     if len(data) > s.max_response_bytes:
                         raise uncertain("전송 응답 크기 초과: 수신 여부 확인 필요")

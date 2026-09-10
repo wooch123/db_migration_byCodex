@@ -38,6 +38,14 @@ class Store:
                     level TEXT NOT NULL, step TEXT NOT NULL, message TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS events_job ON events(job_id, id);
+                CREATE TABLE IF NOT EXISTS http_exchanges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT, record_key TEXT,
+                    started_at TEXT NOT NULL, finished_at TEXT, stage TEXT NOT NULL,
+                    method TEXT NOT NULL, url TEXT NOT NULL, status_code INTEGER,
+                    state TEXT NOT NULL, duration_ms INTEGER, details TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS http_exchanges_job ON http_exchanges(job_id, id);
+                CREATE INDEX IF NOT EXISTS http_exchanges_record ON http_exchanges(job_id, record_key, id);
                 CREATE TABLE IF NOT EXISTS chunks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL,
                     start_date TEXT NOT NULL, end_date TEXT NOT NULL, status TEXT NOT NULL,
@@ -185,6 +193,10 @@ class Store:
         # Only the process holding the runner file lock may call this.
         with self.connect() as db:
             db.execute(
+                "UPDATE http_exchanges SET state='interrupted',finished_at=? WHERE state='sending'",
+                (utcnow(),),
+            )
+            db.execute(
                 "UPDATE deliveries SET status='uncertain',note='프로세스 중단: 운영 서버 수신 여부 확인 필요' WHERE status='sending'"
             )
             db.execute(
@@ -195,6 +207,14 @@ class Store:
 
     def delivery(self, destination: str, key: str):
         return self.one("SELECT * FROM deliveries WHERE destination=? AND record_key=?", (destination, key))
+
+    def exchange(self, exchange_id: int):
+        row = self.one("SELECT * FROM http_exchanges WHERE id=?", (exchange_id,))
+        if row:
+            row["details"] = json.loads(row["details"])
+            if row["state"] == "interrupted" and not row["details"].get("error"):
+                row["details"]["error"] = "프로세스가 중단되어 요청 완료 결과를 기록하지 못했습니다."
+        return row
 
     def save_delivery(self, destination, key, fingerprint, payload, status, job_id, note=None):
         self.execute(

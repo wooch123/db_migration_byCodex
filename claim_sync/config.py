@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     ca_bundle: str = ""
     trust_env_proxy: bool = False
     max_response_bytes: int = Field(default=10485760, ge=1024)
+    http_log_body_bytes: int = Field(default=262144, ge=1024, le=10485760)
     mock_claims_per_day: int = Field(default=6, ge=0, le=10000)
     mock_scenario: Literal["none", "product_missing", "target_error", "target_timeout", "malformed_claim"] = (
         "none"

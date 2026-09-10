@@ -90,6 +90,16 @@ async def test_real_http_to_separate_mock_process(tmp_path, monkeypatch, dry_run
             await Engine(settings, store).run(job_id)
             job = store.job(job_id)
             assert job["status"] == "completed" and job["succeeded"] == 18, job
+            exchanges = store.query(
+                "SELECT id,method,status_code FROM http_exchanges WHERE job_id=?", (job_id,)
+            )
+            assert exchanges and all(row["status_code"] == 200 for row in exchanges)
+            posts = [row for row in exchanges if row["method"] == "POST"]
+            assert len(posts) == (0 if dry_run else 18)
+            if posts:
+                exchange = store.exchange(posts[0]["id"])
+                assert '"values"' in exchange["details"]["request"]["body"]
+                assert '"success": true' in exchange["details"]["response"]["body"]
             assert Store(tmp_path / "upstream").one("SELECT COUNT(*) n FROM mock_target")["n"] == (
                 0 if dry_run else 18
             )

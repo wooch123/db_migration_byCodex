@@ -141,7 +141,7 @@ async def test_changed_product_is_posted_and_a_b_a_uses_new_operation_key(settin
     posts = [request for request in calls if request.method == "POST"]
     assert len(posts) == 3
     assert len({request.headers["Idempotency-Key"] for request in posts}) == 3
-    assert json.loads(posts[0].content)["values"]["part_id"] == claim["partId"]
+    assert json.loads(posts[0].content)["values"]["part_id"] == claim["partId"][:15]
 
 
 async def test_get_retry_and_product_cache(settings, store, claim, product):

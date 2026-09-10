@@ -14,6 +14,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .clients import APIClients, UpstreamError
 from .config import Settings
+from .diagnostics import RequestDiagnostics
+from .http_log import previous_delivery
 from .models import RunSpec, ScheduleSpec
 from .runner import Runner
 from .store import Store, encode, utcnow
@@ -186,6 +188,62 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "items": rows,
             "total": store.one(f"SELECT COUNT(*) n FROM records WHERE {clause}", params)["n"],
         }
+
+    @app.get("/api/http-exchanges")
+    def http_exchanges(
+        job_id: str | None = None,
+        record_key: str | None = None,
+        checks_only: bool = False,
+        errors_only: bool = False,
+        offset: int = Query(0, ge=0),
+        limit: int = Query(30, ge=1, le=100),
+    ):
+        clauses, params = [], []
+        if job_id:
+            require_job(job_id)
+            clauses.append("job_id=?")
+            params.append(job_id)
+        if checks_only:
+            clauses.append("job_id IS NULL")
+        if record_key is not None:
+            clauses.append("record_key=?")
+            params.append(record_key)
+        if errors_only:
+            clauses.append("state IN ('failed','blocked','interrupted')")
+        where = " AND ".join(clauses) or "1=1"
+        items = store.query(
+            f"""SELECT id,job_id,record_key,started_at,finished_at,stage,method,url,status_code,state,duration_ms
+            FROM http_exchanges WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?""",
+            (*params, limit, offset),
+        )
+        return {
+            "items": items,
+            "total": store.one(f"SELECT COUNT(*) n FROM http_exchanges WHERE {where}", params)["n"],
+        }
+
+    @app.get("/api/http-exchanges/{exchange_id}")
+    def http_exchange(exchange_id: int):
+        row = store.exchange(exchange_id)
+        if row is None:
+            raise HTTPException(404, "요청·응답 기록을 찾을 수 없습니다.")
+        return row
+
+    @app.get("/api/jobs/{job_id}/delivery-context")
+    def delivery_context(job_id: str, record_key: str | None = None):
+        require_job(job_id)
+        # Older databases have payloads and the original delivery note, but no HTTP exchange rows.
+        rows = store.query(
+            """SELECT DISTINCT d.* FROM records r JOIN jobs j ON j.id=r.job_id
+            JOIN deliveries d ON d.destination=j.destination AND d.record_key=r.record_key
+            WHERE r.job_id=? AND r.status='uncertain'"""
+            + (" AND r.record_key=?" if record_key is not None else "")
+            + " LIMIT 50",
+            (job_id, record_key) if record_key is not None else (job_id,),
+        )
+        diagnostics = RequestDiagnostics(
+            settings.claims_headers, settings.product_headers, settings.target_headers
+        )
+        return [previous_delivery(store, diagnostics, row, settings.http_log_body_bytes) for row in rows]
 
     @app.get("/api/jobs/{job_id}/export")
     def export(job_id: str):

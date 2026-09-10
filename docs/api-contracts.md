@@ -35,7 +35,7 @@ schema는 JSON Schema `properties` 또는 `fields`/`columns` 배열을 지원합
 
 제품 schema와 제품 응답의 용량 필드는 `denstiy`입니다. FAR API에 전송할 때는 기존 철자인 `density`로 매핑합니다.
 
-`partId[:15]`를 URL 인코딩해 조회합니다. 15자 미만이면 오류입니다. 목적지 `part_id`에는 원본 전체 문자열을 보존합니다. 제품 캐시는 실행 간 공유하지 않아 제품 정보 변경을 다음 실행에 반영합니다.
+`partId[:15]`를 URL 인코딩해 조회합니다. 15자 미만이면 오류입니다. 목적지 `part_id`에도 원본의 좌측 15자만 전송합니다. 제품 캐시는 실행 간 공유하지 않아 제품 정보 변경을 다음 실행에 반영합니다.
 
 ## 3. 전송 값 (21개)
 
@@ -48,7 +48,7 @@ schema는 JSON Schema `properties` 또는 `fields`/`columns` 배열을 지원합
 | cust_name | custName | 문자열 또는 null |
 | fail_loc | failLoc | 문자열 또는 null |
 | fail_symptom | failSymptom | 문자열 또는 null |
-| part_id | partId | 원본 전체 문자열·필수 |
+| part_id | partId | 좌측 15자·필수 |
 | failmode1 | failMode1 | 문자열 또는 null |
 | failmode2 | failMode2 | 문자열 또는 null |
 | comp_wc | shippingWeekCode | 문자열, 앞자리 0 보존 |
@@ -69,7 +69,7 @@ ISO timestamp의 날짜는 원본 시간대에서의 달력 날짜로 유지합�
 {
   "values": {
     "far_no":"FAR-001", "sample_no":"S001", "rcv_date":"2025-01-01", "due_date":"2025-01-15",
-    "cust_name":"Example", "fail_loc":"Korea", "fail_symptom":"Read failure", "part_id":"ABCDEFGHIJKLMNO-EXT",
+    "cust_name":"Example", "fail_loc":"Korea", "fail_symptom":"Read failure", "part_id":"ABCDEFGHIJKLMNO",
     "failmode1":"Read", "failmode2":"Intermittent", "comp_wc":"202501", "far_comp_date":null,
     "ims_created_date":"2025-01-01", "ims_key":"IMS001", "lot_id":"LOT001",
     "app":"SSD", "device":"NVMe", "ctrl":"CTRL", "nand":"V8 1.0", "dram":"LPDDR4 2.0", "density":"1 TB"

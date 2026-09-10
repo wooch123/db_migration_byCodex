@@ -18,7 +18,7 @@ def test_exact_requested_mapping(claim, product):
         "cust_name": "Example",
         "fail_loc": "Korea",
         "fail_symptom": "Read failure",
-        "part_id": "ABCDEFGHIJKLMNO-EXT",
+        "part_id": "ABCDEFGHIJKLMNO",
         "failmode1": "Read",
         "failmode2": "Intermittent",
         "comp_wc": "0025",
@@ -34,6 +34,7 @@ def test_exact_requested_mapping(claim, product):
         "density": "1 TB",
     }
     assert part_prefix(claim) == "ABCDEFGHIJKLMNO"
+    assert claim["partId"] == "ABCDEFGHIJKLMNO-EXT"
 
 
 def test_null_product_components(claim, product):
