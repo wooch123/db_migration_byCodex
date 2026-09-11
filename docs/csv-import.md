@@ -13,7 +13,7 @@
 | 담당자 | name |
 | F/W | firmware |
 | Release Date | release_date |
-| Init. | init |
+| Init. | initialize |
 | SLC Max EC | slc_max_ec |
 | SLC Min. EC | slc_min_ec |
 | SLC Avg. EC | slc_avg_ec |
@@ -49,7 +49,7 @@
 
 실행 등록 시 파일 내용을 SQLite `csv_imports`에 저장합니다. 대기 중 파일을 수정·삭제해도 등록된 데이터로 처리하며, 실행 이력의 재실행도 당시 저장한 데이터를 사용합니다. 수정한 최신 파일을 보내려면 CSV 가져오기 화면에서 다시 미리보기·실행하세요. 원본 파일은 변경하거나 이동하지 않습니다.
 
-이전 버전에서 `Release Date`가 날짜로 변환된 실행도 저장 당시 값을 유지합니다. 원래 텍스트를 전송하려면 업데이트 후 원본 CSV를 다시 미리보기·실행하세요.
+이전 버전에서 `Release Date`가 날짜로 변환되었거나 `Init.`이 `init`으로 매핑된 실행도 저장 당시 값을 유지합니다. 현재의 텍스트 처리와 `initialize` 매핑을 적용하려면 업데이트 후 원본 CSV를 다시 미리보기·실행하세요.
 
 ## 전송 및 재실행
 

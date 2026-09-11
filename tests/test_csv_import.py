@@ -30,7 +30,7 @@ def test_exact_field_mapping_and_leading_zero_text(csv_settings):
         ("담당자", "name"),
         ("F/W", "firmware"),
         ("Release Date", "release_date"),
-        ("Init.", "init"),
+        ("Init.", "initialize"),
         ("SLC Max EC", "slc_max_ec"),
         ("SLC Min. EC", "slc_min_ec"),
         ("SLC Avg. EC", "slc_avg_ec"),

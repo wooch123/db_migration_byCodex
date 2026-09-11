@@ -70,9 +70,9 @@ async def test_csv_insert_skip_and_subset_patch_preserve_other_server_fields(set
     original = json.loads(store.one("SELECT payload FROM mock_target WHERE record_key=?", (key,))["payload"])
     path = write_csv(
         settings,
-        "far,sample,담당자,F/W,EXT_CSD(eMMC Only),Release Date\n"
-        "FAR-20250101-0000,S001,홍길동,001.02,0000ABCDEF,미정 / RC2\n"
-        "NEW-FAR,0002,김철수,002.01,000F,2025-02-29\n",
+        "far,sample,담당자,F/W,EXT_CSD(eMMC Only),Release Date,Init.\n"
+        "FAR-20250101-0000,S001,홍길동,001.02,0000ABCDEF,미정 / RC2,001\n"
+        "NEW-FAR,0002,김철수,002.01,000F,2025-02-29,002\n",
     )
     first = await run_csv(settings, store, path)
     assert first["status"] == "completed" and first["succeeded"] == 2
@@ -92,10 +92,13 @@ async def test_csv_insert_skip_and_subset_patch_preserve_other_server_fields(set
             "firmware": "001.02",
             "ext_csd": "0000ABCDEF",
             "release_date": "미정 / RC2",
+            "initialize": "001",
         },
     }
     post = json.loads(store.exchange(exchanges[2]["id"])["details"]["request"]["body"])
     assert post["values"]["release_date"] == "2025-02-29"
+    assert post["values"]["initialize"] == "002"
+    assert "init" not in post["values"]
     saved = json.loads(store.one("SELECT payload FROM mock_target WHERE record_key=?", (key,))["payload"])
     assert saved == {**original, **patch["values"]}
     repeated = await run_csv(settings, store, path)
