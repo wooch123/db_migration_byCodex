@@ -1166,6 +1166,9 @@ td small {
 .csv-mapping-card .soft-note { margin-top: 0; }
 .csv-mapping-card td { white-space: normal; overflow-wrap: anywhere; }
 .csv-mapped { display: inline-block; font-size: 10px; color: var(--green); margin-left: 8px; }
+.csv-record-line { color: var(--green); }
+.csv-record-note { max-width: 300px; white-space: normal; overflow-wrap: anywhere; line-height: 1.6; }
+#payload-note { white-space: pre-wrap; overflow-wrap: anywhere; }
 #csv-workflow { align-items: center; flex-wrap: wrap; }
 #csv-workflow > div { flex: 1 1 250px; }
 #job-title, .history-row strong { overflow-wrap: anywhere; }

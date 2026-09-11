@@ -105,7 +105,11 @@ def test_explicit_null_only_clears_headers_present_in_file(csv_settings):
         "firmware": None,
         "release_date": None,
     }
-    assert load_csv(csv_settings, name)["error_count"] == 1
+    omitted = load_csv(csv_settings, name)
+    assert omitted["error_count"] == omitted["warning_count"] == 0
+    assert omitted["rows"] == []
+    assert omitted["skipped_count"] == 1
+    assert omitted["skipped_rows"][0]["values"] == {"far_no": "001", "sample_no": "002"}
 
 
 @pytest.mark.parametrize(
@@ -137,22 +141,35 @@ def test_release_date_preserves_text_without_date_validation(csv_settings, value
 
 
 @pytest.mark.parametrize("blank_mode", ["omit", "null"])
-def test_required_identifiers_cannot_be_null(csv_settings, blank_mode):
-    name, _ = write_csv(csv_settings, "far,sample,F/W\n,002,V1\n001, ,V2\n")
+def test_missing_identifiers_skip_with_warnings_without_blocking_valid_rows(csv_settings, blank_mode):
+    name, _ = write_csv(csv_settings, "far,sample,F/W\n,002,V1\n001, ,V2\n001,003,V3\n")
     result = load_csv(csv_settings, name, blank_mode)
-    assert result["error_count"] == 2
-    assert result["rows"] == []
-    assert "far_no" in result["errors"][0]["message"]
-    assert "sample_no" in result["errors"][1]["message"]
+    assert result["error_count"] == 0
+    assert result["warning_count"] == result["skipped_count"] == 2
+    assert "far_no" in result["warnings"][0]["message"]
+    assert "sample_no" in result["warnings"][1]["message"]
+    assert [item["line"] for item in result["skipped_rows"]] == [2, 3]
+    assert result["rows"] == [{"line": 4, "values": {"far_no": "001", "sample_no": "003", "firmware": "V3"}}]
 
 
 @pytest.mark.parametrize("second_value", ["V1", "V2"])
-def test_duplicate_business_keys_are_explicit_errors(csv_settings, second_value):
+def test_duplicate_business_keys_warn_but_retain_every_row(csv_settings, second_value):
     name, _ = write_csv(csv_settings, f"far,sample,F/W\n001,002,V1\n001,002,{second_value}\n")
     result = load_csv(csv_settings, name)
-    assert result["error_count"] == 1
-    assert result["valid_rows"] == 1
-    assert result["errors"] == [{"line": 3, "message": "같은 far/sample 조합이 2행에 이미 있습니다."}]
+    assert result["error_count"] == result["skipped_count"] == 0
+    assert result["valid_rows"] == result["total_rows"] == 2
+    assert result["warning_count"] == 1
+    assert result["warnings"] == [
+        {"line": 3, "message": "같은 far/sample 조합이 2행에 이미 있습니다. 파일 순서대로 전송합니다."}
+    ]
+    assert [row["values"]["firmware"] for row in result["rows"]] == ["V1", second_value]
+
+
+def test_matching_nonkey_values_for_different_keys_do_not_warn(csv_settings):
+    name, _ = write_csv(csv_settings, "far,sample,F/W\n001,002,V1\n001,003,V1\n")
+    result = load_csv(csv_settings, name)
+    assert result["warning_count"] == result["error_count"] == 0
+    assert result["valid_rows"] == 2
 
 
 @pytest.mark.parametrize(
@@ -164,9 +181,8 @@ def test_duplicate_business_keys_are_explicit_errors(csv_settings, second_value)
         "far,sample,F/W, f/w \n",
         "far,sample,F/W,unknown, UNKNOWN \n",
         "far,F/W\n001,V1\n",
-        "far,sample,unknown\n001,002,V1\n",
         "far,sample,F/W\n001,002,V1,extra\n",
-        "far,sample,F/W\n001,002\n",
+        "far,sample,F/W\n001,002,V1,,extra\n",
         'far,sample,F/W\n001,002,"unterminated\n',
     ],
 )
@@ -176,17 +192,67 @@ def test_structural_failures_reject_file(csv_settings, content):
         load_csv(csv_settings, name)
 
 
-def test_empty_data_rows_and_error_detail_limit(csv_settings):
-    name, _ = write_csv(csv_settings, "far,sample,F/W\n\n,,\n")
+@pytest.mark.parametrize("data", ["", "\n,,\n", "  , ,  \n"])
+def test_header_only_and_empty_data_are_not_validation_errors(csv_settings, data):
+    name, _ = write_csv(csv_settings, "far,sample,F/W\n" + data)
     result = load_csv(csv_settings, name)
-    assert result["total_rows"] == 0
-    assert result["error_count"] == 1
-    assert result["errors"][0]["line"] is None
+    assert result["total_rows"] == result["valid_rows"] == result["skipped_count"] == 0
+    assert result["error_count"] == result["warning_count"] == 0
+    assert result["rows"] == result["errors"] == result["warnings"] == []
+
+
+def test_warning_detail_limit_does_not_drop_skipped_row_metadata(csv_settings):
     name, _ = write_csv(csv_settings, "far,sample,F/W\n" + ",002,V1\n" * 125)
     result = load_csv(csv_settings, name)
-    assert result["total_rows"] == result["error_count"] == 125
-    assert len(result["errors"]) == 100
-    assert result["valid_rows"] == 0
+    assert result["total_rows"] == result["warning_count"] == result["skipped_count"] == 125
+    assert len(result["warnings"]) == 100
+    assert len(result["skipped_rows"]) == 125
+    assert result["skipped_rows"][-1]["line"] == 126
+    assert result["valid_rows"] == result["error_count"] == 0
+
+
+def test_duplicate_warning_limit_keeps_all_rows_and_first_line(csv_settings):
+    name, _ = write_csv(csv_settings, "far,sample,F/W\n" + "001,002,V1\n" * 125)
+    result = load_csv(csv_settings, name)
+    assert result["valid_rows"] == result["total_rows"] == 125
+    assert result["warning_count"] == 124
+    assert len(result["warnings"]) == 100
+    assert all("2행" in item["message"] for item in result["warnings"])
+    assert [row["line"] for row in result["rows"]] == list(range(2, 127))
+
+
+@pytest.mark.parametrize("header", ["far,sample", "far,sample,unknown"])
+def test_keys_only_and_unknown_only_rows_skip_without_errors(csv_settings, header):
+    data = "001,002" + (",memo" if "unknown" in header else "")
+    name, _ = write_csv(csv_settings, header + "\n" + data + "\n")
+    result = load_csv(csv_settings, name)
+    assert result["error_count"] == result["warning_count"] == result["valid_rows"] == 0
+    assert result["skipped_count"] == result["total_rows"] == 1
+    assert result["skipped_rows"][0]["values"] == {"far_no": "001", "sample_no": "002"}
+    assert "전송할 값이 없어" in result["skipped_rows"][0]["message"]
+
+
+@pytest.mark.parametrize("blank_mode", ["omit", "null"])
+def test_short_rows_and_extra_empty_trailing_cells_are_blanks(csv_settings, blank_mode):
+    name, _ = write_csv(csv_settings, "far,sample,F/W,담당자\n001,002,V1\n003,004,V2,, ,\n")
+    result = load_csv(csv_settings, name, blank_mode)
+    assert result["error_count"] == result["warning_count"] == result["skipped_count"] == 0
+    assert result["valid_rows"] == 2
+    values = [row["values"] for row in result["rows"]]
+    assert [value["firmware"] for value in values] == ["V1", "V2"]
+    if blank_mode == "null":
+        assert all("name" in value and value["name"] is None for value in values)
+    else:
+        assert all("name" not in value for value in values)
+
+
+def test_short_keys_only_row_skips_without_errors(csv_settings):
+    name, _ = write_csv(csv_settings, "far,sample,F/W\n001,002\n003,004,V2\n")
+    result = load_csv(csv_settings, name)
+    assert result["error_count"] == result["warning_count"] == 0
+    assert result["skipped_count"] == result["valid_rows"] == 1
+    assert result["skipped_rows"][0]["line"] == 2
+    assert result["rows"][0]["line"] == 3
 
 
 def test_file_size_and_row_count_limits(csv_settings):

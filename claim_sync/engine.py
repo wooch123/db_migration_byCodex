@@ -1,6 +1,6 @@
 import asyncio
 import hashlib
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from datetime import date, timedelta
 
 from .clients import AmbiguousDelivery, APIClients, OversizedResponse, UpstreamError
@@ -69,7 +69,7 @@ class Engine:
             log(
                 "info" if status == "completed" else "warning",
                 "finish",
-                f"실행 종료 · 처리 {final['processed']} · 성공 {final['succeeded']} · 변경 없음 {final['skipped']} · 실패 {final['failed']} · 실패 구간 {bad_chunks}",
+                f"실행 종료 · 처리 {final['processed']} · 성공 {final['succeeded']} · {'건너뜀' if spec.source_type == 'csv' else '변경 없음'} {final['skipped']} · 실패 {final['failed']} · 실패 구간 {bad_chunks}",
             )
         except CancelledRun:
             self.store.update_job(job_id, status="cancelled", finished_at=utcnow())
@@ -108,27 +108,70 @@ class Engine:
         ):
             raise UpstreamError("CSV 가져오기에는 TARGET_KEY_FIELDS의 far_no와 sample_no 두 키가 필요합니다.")
         snapshot = self.store.csv_snapshot(job_id)
-        if not snapshot or snapshot.get("error_count") or not snapshot.get("rows"):
+        if (
+            not snapshot
+            or snapshot.get("error_count")
+            or not (snapshot.get("rows") or snapshot.get("skipped_rows"))
+        ):
             raise UpstreamError("검증된 CSV 실행 데이터가 없습니다. CSV 가져오기 화면에서 새로 등록하세요.")
-        self.store.increment(job_id, fetched=len(snapshot["rows"]))
+        rows = snapshot["rows"]
+        skipped = snapshot.get("skipped_rows", [])
+        self.store.increment(job_id, fetched=len(rows) + len(skipped))
         log(
             "info",
             "csv",
-            f"CSV {snapshot['filename']} · {snapshot['encoding']} · {len(snapshot['rows'])}행 · {'전송 없이 검증' if spec.dry_run else 'API 전송'} · 파일 해시 {snapshot['sha256']}",
+            f"CSV {snapshot['filename']} · {snapshot['encoding']} · 전송 대상 {len(rows)}행 · 제외 {len(skipped)}행 · {'전송 없이 검증' if spec.dry_run else 'API 전송'} · 파일 해시 {snapshot['sha256']}",
+        )
+        for warning in snapshot.get("warnings", []):
+            log("warning", "csv", f"{snapshot['filename']} · CSV {warning['line']}행: {warning['message']}")
+        omitted_warnings = snapshot.get("warning_count", 0) - len(snapshot.get("warnings", []))
+        if omitted_warnings > 0:
+            log("warning", "csv", f"추가 경고 {omitted_warnings}건. 행별 처리 결과를 확인하세요.")
+        key_counts = Counter((row["values"]["far_no"], row["values"]["sample_no"]) for row in rows)
+        ordered_rows = sorted(
+            [*(dict(row, skip=False) for row in rows), *(dict(row, skip=True) for row in skipped)],
+            key=lambda row: row["line"],
         )
 
         async def process(api):
-            for row in snapshot["rows"]:
+            for row in ordered_rows:
                 self.check_cancel(job_id)
+                values = row["values"]
+                identity = (values.get("far_no"), values.get("sample_no"))
+                if row["skip"]:
+                    self.store.record(
+                        job_id,
+                        encode(["csv", row["line"]]),
+                        "skipped",
+                        values,
+                        business_key=encode([values[field] for field in self.settings.target_key_fields])
+                        if all(identity)
+                        else None,
+                        csv_line=row["line"],
+                        note=row["message"],
+                    )
+                    self.store.increment(job_id, processed=1, skipped=1)
+                    await asyncio.sleep(0)
+                    continue
 
                 async def prepare_values(values=row["values"]):
                     return values
 
-                await self.process_values(api, job_id, spec, prepare_values, f"CSV {row['line']}행")
+                repeated = key_counts[identity] > 1
+                await self.process_values(
+                    api,
+                    job_id,
+                    spec,
+                    prepare_values,
+                    f"CSV {row['line']}행",
+                    csv_line=row["line"],
+                    force_send=repeated,
+                    note="중복 far/sample: CSV 파일 순서대로 처리합니다." if repeated else None,
+                )
                 await asyncio.sleep(0)
 
         # CSV validation needs no upstream API, client initialization, or TLS configuration.
-        if spec.dry_run:
+        if spec.dry_run or not rows:
             await process(None)
         else:
             async with APIClients(self.settings, self.store, log, self.transport, job_id=job_id) as api:
@@ -208,7 +251,9 @@ class Engine:
 
         await self.process_values(api, job_id, spec, prepare_values, fallback_key)
 
-    async def process_values(self, api, job_id, spec, prepare_values, fallback_key):
+    async def process_values(
+        self, api, job_id, spec, prepare_values, fallback_key, *, csv_line=None, force_send=False, note=None
+    ):
         key, values = fallback_key, None
         status, error = "failed", None
         duplicate = False
@@ -218,8 +263,12 @@ class Engine:
             if any(value is None or not str(value).strip() for value in identity):
                 raise ValueError("전송 대상의 업무 키 값이 비어 있습니다.")
             key = encode(identity)
-            prior = self.store.one(
-                "SELECT payload FROM records WHERE job_id=? AND record_key=?", (job_id, key)
+            prior = (
+                None
+                if csv_line is not None
+                else self.store.one(
+                    "SELECT payload FROM records WHERE job_id=? AND record_key=?", (job_id, key)
+                )
             )
             if prior:
                 if prior["payload"] != encode(values):
@@ -237,7 +286,12 @@ class Engine:
                 status = "validated"
             elif delivery and delivery["status"] in {"sending", "uncertain"}:
                 raise AmbiguousDelivery(api.blocked(values, key, delivery))
-            elif delivery and delivery["status"] == "success" and delivery["fingerprint"] == fingerprint:
+            elif (
+                not force_send
+                and delivery
+                and delivery["status"] == "success"
+                and delivery["fingerprint"] == fingerprint
+            ):
                 status = "skipped"
             else:
                 self.check_cancel(job_id)
@@ -246,12 +300,16 @@ class Engine:
                 )
                 try:
                     # A new operation key for A -> B -> A avoids reusing an old idempotent response.
-                    operation_key = hashlib.sha256(f"{fingerprint}:{job_id}".encode()).hexdigest()
+                    operation_identity = f"{fingerprint}:{job_id}" + (
+                        f":CSV:{csv_line}" if csv_line is not None else ""
+                    )
+                    operation_key = hashlib.sha256(operation_identity.encode()).hexdigest()
                     await api.send(
                         values,
                         operation_key,
                         record_key=key,
                         patch_on_bad_request=spec.source_type == "csv",
+                        source_line=csv_line,
                     )
                 except (AmbiguousDelivery, asyncio.CancelledError) as exc:
                     self.store.save_delivery(
@@ -291,8 +349,13 @@ class Engine:
             if not duplicate:
                 if error and spec.source_type == "csv":
                     error = f"{spec.csv_filename} · {fallback_key}\n{error}"
-                self.store.execute(
-                    """INSERT INTO records(job_id,record_key,status,payload,error,created_at) VALUES(?,?,?,?,?,?)
-                    ON CONFLICT(job_id,record_key) DO UPDATE SET status=excluded.status,error=excluded.error""",
-                    (job_id, key, status, encode(values) if values else None, error, utcnow()),
+                self.store.record(
+                    job_id,
+                    encode(["csv", csv_line]) if csv_line is not None else key,
+                    status,
+                    values,
+                    error,
+                    business_key=key if csv_line is not None else None,
+                    csv_line=csv_line,
+                    note=note,
                 )

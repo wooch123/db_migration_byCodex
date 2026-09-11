@@ -108,6 +108,16 @@ async function refreshInspector() {
           return;
         }
       }
+      if (scope === "selected" && data.total === 0 && jobId === selectedJob &&
+          selectedJobSpec?.source_type === "csv" && selectedJobSummary?.id === jobId &&
+          selectedJobSummary.status === "completed" && selectedJobSummary.fetched > 0 &&
+          selectedJobSummary.processed === selectedJobSummary.fetched &&
+          selectedJobSummary.skipped === selectedJobSummary.fetched &&
+          selectedJobSummary.succeeded === 0 && selectedJobSummary.failed === 0 &&
+          selectedJobSummary.uncertain === 0) {
+        emptyInspector("모든 CSV 행이 변경 없음 또는 전송 제외로 처리되어 API를 호출하지 않았습니다. 행별 결과에서 제외 사유와 입력값을 확인하세요.");
+        return;
+      }
       emptyInspector("저장된 HTTP 기록이 없습니다. 업데이트 이전 실행은 기존 오류와 전송 데이터만 남아 있을 수 있습니다.");
       return;
     }

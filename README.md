@@ -70,7 +70,7 @@ TARGET_BASE_URL=https://estgtask.samsungds.net
 - ISO 날짜 정규화, NAND/DRAM 조합, Part ID 좌측 15자 전송, 레코드별 검증.
 - 우측 요청·응답 패널: GET 조건, POST/PATCH JSON, 실제 응답 코드·본문·헤더·소요 시간, 이전 전송 오류 연결, 복사·JSON 저장. 인증 값은 가리며 본문 저장 한도는 `HTTP_LOG_BODY_BYTES`로 설정합니다.
 - SQLite에 작업·구간·레코드·이벤트·스케줄·성공 전송 상태 저장.
-- 동일 업무 키와 동일 전송 값은 건너뛰고 변경된 값은 다시 POST. Claim은 지정된 중복 응답, CSV는 모든 HTTP 400 응답에서 PATCH로 한 번 전환.
+- 동일 업무 키와 동일 전송 값은 건너뛰고 변경된 값은 다시 POST. CSV 파일 내 중복 키는 경고 후 순서대로 모두 전송. Claim은 지정된 중복 응답, CSV는 모든 HTTP 400 응답에서 PATCH로 한 번 전환.
 - GET 재시도, POST/PATCH 응답 유실 보류, 목록에서 체크해 반영됨·미반영을 처리하는 확인 화면, 실행 중지 및 재실행.
 - 자동 갱신, 프로세스 중복 실행 방지, 중단 이력 복구, 웹 없는 CLI 실행.
 - 실시간 상태/로그(2초 갱신), 실행 이력, 필터·페이지별 레코드, JSON 미리보기, NDJSON 내보내기.
@@ -79,7 +79,7 @@ TARGET_BASE_URL=https://estgtask.samsungds.net
 
 ## CSV 파일의 추가 필드 전송
 
-프로젝트에 `csv/` 폴더를 제공합니다. [CSV 입력 양식](examples/far_import_template.csv)을 복사해 `far`, `sample`과 필요한 값을 채운 뒤 웹의 **CSV 가져오기**에서 파일을 선택하세요. 미리보기로 헤더·값·오류를 확인한 후 검증 또는 API 전송을 실행할 수 있습니다. 기본값은 빈 셀을 전송에서 제외해 기존 서버 값을 유지하는 방식입니다.
+프로젝트에 `csv/` 폴더를 제공합니다. [CSV 입력 양식](examples/far_import_template.csv)을 복사해 `far`, `sample`과 필요한 값을 채운 뒤 웹의 **CSV 가져오기**에서 파일을 선택하세요. 미리보기로 헤더·값·경고·전송 제외 행을 확인한 후 검증 또는 API 전송을 실행할 수 있습니다. 빈 셀은 기본적으로 오류 없이 전송에서 제외하며, 업무 키가 비었거나 전송할 선택 값이 없는 행도 건너뜁니다. 같은 `far + sample`이 반복되면 경고만 표시하고 파일 순서대로 모두 전송합니다. 같은 필드는 뒤 행의 값으로 갱신하며 제외한 빈 필드의 기존 값은 유지합니다.
 
 이 기능은 CSV 필드만 전송하며 Claim·제품 API를 조회하지 않습니다. `Release Date`도 텍스트로 전송합니다. POST가 **HTTP 400 Bad Request**를 반환하면 오류 문구와 관계없이 같은 URL로 PATCH를 한 번 보냅니다. `where`는 `far_no`와 `sample_no`, `values`는 CSV에서 전송할 키 외 필드입니다. 입력 파일은 Git에 업로드하지 않습니다. 전체 컬럼 매핑, 빈칸·텍스트 처리, `run.bat csv-import` 및 Ubuntu 사용 방법은 [CSV 가져오기 안내](docs/csv-import.md)를 참고하세요.
 

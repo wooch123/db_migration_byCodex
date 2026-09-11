@@ -53,6 +53,7 @@ const viewInfo = {
 let state = null,
   selectedJob = null,
   selectedJobSpec = null,
+  selectedJobSummary = null,
   periodMode = "relative",
   currentView = "dashboard",
   events = [],
@@ -199,6 +200,7 @@ function renderDashboardSource() {
   $("claims-config-card").hidden = false;
   $("chunk-header").hidden = csv;
   $("chunk-list").hidden = csv;
+  $("record-filter").querySelector('option[value="skipped"]').textContent = csv ? "변경 없음 / 전송 제외" : "변경 없음";
   $("records-columns").innerHTML = (csv
     ? ["FAR NO. / SAMPLE", "담당자", "F/W", "Release Date", "입력 필드", "처리 상태", ""]
     : ["FAR NO. / SAMPLE", "접수일", "고객사", "PART ID", "제품 / 용량", "처리 상태", ""]
@@ -296,6 +298,10 @@ function renderState() {
 }
 function renderJob(job) {
   selectedJobSpec = job.spec;
+  selectedJobSummary = {
+    id: job.id, status: job.status, fetched: job.fetched, processed: job.processed,
+    skipped: job.skipped, succeeded: job.succeeded, failed: job.failed, uncertain: job.uncertain,
+  };
   const csv = job.spec.source_type === "csv";
   renderDashboardSource();
   $("job-status").className = `pill status-${job.status}`;
@@ -351,7 +357,7 @@ function renderJob(job) {
   $("metric-fetched").innerHTML = `${number(job.fetched)}<span>건</span>`;
   $("metric-success").innerHTML = `${number(job.succeeded)}<span>건</span>`;
   $("metric-success-note").textContent =
-    `${job.spec.dry_run ? "검증 완료" : "전송 완료"} · 변경 없음 ${number(job.skipped)}건`;
+    `${job.spec.dry_run ? "검증 완료" : "전송 완료"} · ${csv ? "변경 없음 / 전송 제외" : "변경 없음"} ${number(job.skipped)}건`;
   $("metric-failed").innerHTML =
     `${number(job.failed + job.uncertain + chunkFailure)}<span>건</span>`;
   $("metric-failed-note").textContent =
@@ -402,10 +408,15 @@ async function loadRecords(jobId = selectedJob) {
     ? rows
         .map((row, index) => {
           const p = row.payload || {};
-          const fields = selectedJobSpec?.source_type === "csv"
+          const csv = selectedJobSpec?.source_type === "csv";
+          const fields = csv
             ? `<td>${esc(p.name ?? "—")}</td><td>${esc(p.firmware ?? "—")}</td><td>${esc(p.release_date ?? "—")}</td><td>${number(Object.keys(p).filter((key) => !["far_no", "sample_no"].includes(key)).length)}개</td>`
             : `<td>${esc(p.rcv_date || "—")}</td><td>${esc(p.cust_name || "—")}</td><td class="mono">${esc(p.part_id || "—")}</td><td>${esc(p.app || "—")}<small>${esc(p.density || "")}</small></td>`;
-          return `<tr class="record-row"><td><strong>${esc(p.far_no || "유효하지 않은 레코드")}</strong><small>${esc(p.sample_no || row.record_key)}</small></td>${fields}<td>${badge(row.status)}</td><td><button class="text-button" data-record="${index}" aria-label="${esc(p.far_no || "레코드")} 전송 데이터 보기">보기 →</button></td></tr>`;
+          const csvLine = csv && row.csv_line ? `<small class="csv-record-line">CSV ${number(row.csv_line)}행</small>` : "";
+          const status = csv && row.status === "skipped" && row.note
+            ? '<span class="pill status-skipped">전송 제외</span>' : badge(row.status);
+          const note = csv && row.note ? `<small class="csv-record-note">${esc(row.note)}</small>` : "";
+          return `<tr class="record-row"><td><strong>${esc(p.far_no || (csv ? "—" : "유효하지 않은 레코드"))}</strong><small>${esc(p.sample_no || (csv ? "—" : row.record_key))}</small>${csvLine}</td>${fields}<td>${status}${note}</td><td><button class="text-button" data-record="${index}" aria-label="${esc(csv && row.csv_line ? `CSV ${row.csv_line}행` : p.far_no || "레코드")} 전송 데이터 보기">보기 →</button></td></tr>`;
         })
         .join("")
     : '<tr><td colspan="7" class="table-empty">표시할 데이터가 없습니다.</td></tr>';
@@ -470,7 +481,7 @@ async function action(button, callback) {
     button.disabled = false;
   }
 }
-function openPayload(payload, error, context = null) {
+function openPayload(payload, error, context = null, note = null) {
   payloadTraceContext = context;
   $("inspect-payload").hidden = !context;
   $("payload-code").textContent = JSON.stringify(
@@ -480,6 +491,8 @@ function openPayload(payload, error, context = null) {
   );
   $("payload-error").hidden = !error;
   $("payload-error").textContent = error || "";
+  $("payload-note").hidden = !note;
+  $("payload-note").textContent = note || "";
   $("payload-dialog").showModal();
 }
 async function loadUnresolved() {
@@ -607,7 +620,9 @@ $("records-body").addEventListener("click", (e) => {
   const b = e.target.closest("[data-record]");
   if (b) {
     const row = rows[Number(b.dataset.record)];
-    openPayload(row.payload, row.error, { jobId: selectedJob, recordKey: row.record_key });
+    const note = selectedJobSpec?.source_type === "csv" && row.csv_line
+      ? `CSV ${row.csv_line}행${row.note ? ` · ${row.note}` : ""}` : null;
+    openPayload(row.payload, row.error, { jobId: selectedJob, recordKey: row.record_key }, note);
   }
 });
 $("history-list").addEventListener("click", (e) => {

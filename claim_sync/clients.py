@@ -341,14 +341,18 @@ class APIClients:
         body = await self.get("제품 정보", s.product_base_url.rstrip("/") + path, s.product_headers)
         return product_record(body, s.product_records_path)
 
-    async def send(self, values: dict, fingerprint: str, *, record_key=None, patch_on_bad_request=False):
+    async def send(
+        self, values: dict, fingerprint: str, *, record_key=None, patch_on_bad_request=False, source_line=None
+    ):
         s = self.settings
         if not s.can_write:
             raise UpstreamError(
                 "실제 전송 잠금: ALLOW_LIVE_WRITES 및 TARGET_UPSERT_CONFIRMED 설정을 확인하세요."
             )
         try:
-            await self._write("POST", {"values": values}, fingerprint, record_key=record_key)
+            await self._write(
+                "POST", {"values": values}, fingerprint, record_key=record_key, source_line=source_line
+            )
         except BadRequestTarget as exc:
             if not patch_on_bad_request and not isinstance(exc, DuplicateTarget):
                 raise
@@ -370,9 +374,17 @@ class APIClients:
             # A server may share its idempotency cache across methods. PATCH must not
             # reuse the rejected POST's response or request fingerprint.
             patch_key = hashlib.sha256(f"{fingerprint}:PATCH".encode()).hexdigest()
-            await self._write("PATCH", {"where": where, "values": updates}, patch_key, record_key=record_key)
+            await self._write(
+                "PATCH",
+                {"where": where, "values": updates},
+                patch_key,
+                record_key=record_key,
+                source_line=source_line,
+            )
 
-    async def _write(self, method: str, payload: dict, operation_key: str, *, record_key=None):
+    async def _write(
+        self, method: str, payload: dict, operation_key: str, *, record_key=None, source_line=None
+    ):
         s = self.settings
         headers = dict(s.target_headers)
         if s.target_idempotency_header:
@@ -383,7 +395,8 @@ class APIClients:
             # Neither write method is retried after an uncertain response. send()
             # may transition a rejected POST to PATCH once under its import policy.
             async with self.exchange(
-                "FAR 수정" if method == "PATCH" else "FAR 전송",
+                ("FAR 수정" if method == "PATCH" else "FAR 전송")
+                + (f" · CSV {source_line}행" if source_line is not None else ""),
                 method,
                 s.target_url,
                 headers=headers,

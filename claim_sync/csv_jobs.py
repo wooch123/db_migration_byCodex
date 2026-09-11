@@ -11,7 +11,7 @@ def validate_snapshot(settings, snapshot):
         raise CsvImportError(
             f"CSV 오류 {snapshot['error_count']}개를 수정한 뒤 다시 확인하세요. 전송하지 않았습니다."
         )
-    if not snapshot["rows"]:
+    if not (snapshot["rows"] or snapshot.get("skipped_rows")):
         raise CsvImportError("전송할 CSV 데이터 행이 없습니다.")
 
 

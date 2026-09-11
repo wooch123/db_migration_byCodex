@@ -37,7 +37,7 @@ CSV_MAPPING = {
     "EXT_CSD(eMMC Only)": "ext_csd",
 }
 _KEYS = {"far_no", "sample_no"}
-_MAX_ERROR_DETAILS = 100
+_MAX_WARNING_DETAILS = 100
 _CSV_LOCK = Lock()
 
 
@@ -195,8 +195,6 @@ def _parse_rows(content: str, max_rows: int, blank_mode: str) -> dict:
     targets = [_NORMALIZED_MAPPING.get(header) for header in normalized]
     if not _KEYS.issubset(targets):
         raise CsvImportError("CSV에는 far와 sample 컬럼 헤더가 모두 있어야 합니다.")
-    if not any(target and target not in _KEYS for target in targets):
-        raise CsvImportError("CSV에는 far와 sample 이외에 전송할 수 있는 컬럼이 하나 이상 있어야 합니다.")
     result = {
         "headers": [
             {"source": source.strip(), "target": target}
@@ -206,12 +204,26 @@ def _parse_rows(content: str, max_rows: int, blank_mode: str) -> dict:
             source.strip() for source, target in zip(source_headers, targets, strict=True) if not target
         ],
         "rows": [],
+        "skipped_rows": [],
+        "skipped_count": 0,
+        "warnings": [],
+        "warning_count": 0,
         "errors": [],
         "error_count": 0,
         "total_rows": 0,
         "valid_rows": 0,
     }
     seen = {}
+
+    def warn(line: int, message: str) -> None:
+        result["warning_count"] += 1
+        if len(result["warnings"]) < _MAX_WARNING_DETAILS:
+            result["warnings"].append({"line": line, "message": message})
+
+    def skip(line: int, values: dict, message: str) -> None:
+        result["skipped_count"] += 1
+        result["skipped_rows"].append({"line": line, "values": values, "message": message})
+
     try:
         while True:
             line = reader.line_num + 1
@@ -224,43 +236,43 @@ def _parse_rows(content: str, max_rows: int, blank_mode: str) -> dict:
             result["total_rows"] += 1
             if result["total_rows"] > max_rows:
                 raise CsvImportError(f"CSV 데이터 행이 제한({max_rows:,}행)을 초과합니다.")
-            if len(row) != len(targets):
+            if any(value.strip() for value in row[len(targets) :]):
                 raise CsvImportError(
                     f"CSV {line}행의 컬럼 수({len(row)})가 헤더({len(targets)})와 다릅니다. 쉼표와 따옴표를 확인하세요."
                 )
+            # Spreadsheet exports can omit empty trailing cells or append empty
+            # delimiters. Both represent blanks, not malformed populated fields.
+            row = row[: len(targets)] + [""] * max(0, len(targets) - len(row))
             values = {}
-            row_errors = []
+            missing_keys = []
             for target, raw_value in zip(targets, row, strict=True):
                 if target is None:
                     continue
                 value = raw_value.strip()
                 if target in _KEYS:
                     if not value:
-                        row_errors.append(f"필수 값 {target}가 비어 있습니다.")
+                        missing_keys.append(target)
                     values[target] = value
                 elif value:
                     values[target] = value
                 elif blank_mode == "null":
                     values[target] = None
+            if missing_keys:
+                message = f"필수 값 {', '.join(missing_keys)}가 비어 있어 이 행은 건너뜁니다."
+                warn(line, message)
+                skip(line, values, message)
+                continue
             if not any(target not in _KEYS for target in values):
-                row_errors.append("far와 sample 이외에 전송할 값이 없습니다.")
+                skip(line, values, "far와 sample 이외에 전송할 값이 없어 이 행은 건너뜁니다.")
+                continue
             key = (values["far_no"], values["sample_no"])
-            if all(key):
-                if key in seen:
-                    row_errors.append(f"같은 far/sample 조합이 {seen[key]}행에 이미 있습니다.")
-                else:
-                    seen[key] = line
-            if row_errors:
-                result["error_count"] += 1
-                if len(result["errors"]) < _MAX_ERROR_DETAILS:
-                    result["errors"].append({"line": line, "message": " ".join(row_errors)})
+            if key in seen:
+                warn(line, f"같은 far/sample 조합이 {seen[key]}행에 이미 있습니다. 파일 순서대로 전송합니다.")
             else:
-                result["rows"].append({"line": line, "values": values})
+                seen[key] = line
+            result["rows"].append({"line": line, "values": values})
     except csv.Error as exc:
         raise CsvImportError(f"CSV {reader.line_num}행 부근의 형식이 올바르지 않습니다: {exc}") from exc
-    if not result["total_rows"]:
-        result["error_count"] = 1
-        result["errors"].append({"line": None, "message": "CSV에 데이터 행이 없습니다."})
     result["valid_rows"] = len(result["rows"])
     return result
 

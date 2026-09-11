@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from filelock import FileLock
+
 from .models import RunSpec, ScheduleSpec
 
 
@@ -21,7 +23,7 @@ class Store:
         self.data_dir = data_dir.resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.data_dir / "claim-sync.sqlite3"
-        with self.connect() as db:
+        with FileLock(str(self.data_dir / ".schema.lock"), timeout=15), self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS jobs (
@@ -72,6 +74,13 @@ class Store:
                     record_key TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
             """)
+            # Add row identity without rewriting existing records or their unique index.
+            # Serializing this migration also supports web/worker starting together.
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(records)")}
+            for name, kind in (("business_key", "TEXT"), ("csv_line", "INTEGER"), ("note", "TEXT")):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE records ADD COLUMN {name} {kind}")
 
     @contextmanager
     def connect(self):
@@ -102,6 +111,24 @@ class Store:
             (job_id, utcnow(), level, step, message),
         )
 
+    def record(self, job_id, key, status, values, error=None, *, business_key=None, csv_line=None, note=None):
+        self.execute(
+            """INSERT INTO records(job_id,record_key,status,payload,error,created_at,business_key,csv_line,note)
+            VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id,record_key) DO UPDATE SET
+            status=excluded.status,error=excluded.error""",
+            (
+                job_id,
+                key,
+                status,
+                encode(values) if values else None,
+                error,
+                utcnow(),
+                business_key,
+                csv_line,
+                note,
+            ),
+        )
+
     def enqueue(self, spec: RunSpec, destination: str, source="manual") -> str:
         if spec.source_type == "csv":
             raise ValueError("CSV 작업은 검증한 파일 데이터를 함께 등록해야 합니다.")
@@ -116,7 +143,7 @@ class Store:
     def enqueue_csv(self, spec: RunSpec, destination: str, snapshot: dict, source="csv") -> str:
         if spec.source_type != "csv" or spec.csv_filename != snapshot["filename"]:
             raise ValueError("CSV 실행 설정과 파일 데이터가 일치하지 않습니다.")
-        if snapshot.get("error_count") or not snapshot.get("rows"):
+        if snapshot.get("error_count") or not (snapshot.get("rows") or snapshot.get("skipped_rows")):
             raise ValueError("오류가 없고 전송할 데이터가 있는 CSV만 등록할 수 있습니다.")
         job_id = uuid.uuid4().hex
         with self.connect() as db:
@@ -132,7 +159,7 @@ class Store:
                     utcnow(),
                     "info",
                     "queue",
-                    f"CSV {spec.csv_filename}: {len(snapshot['rows'])}행의 데이터를 저장하고 작업을 등록했습니다.",
+                    f"CSV {spec.csv_filename}: 전송 대상 {len(snapshot['rows'])}행 · 제외 {len(snapshot.get('skipped_rows', []))}행의 데이터를 저장하고 작업을 등록했습니다.",
                 ),
             )
         return job_id

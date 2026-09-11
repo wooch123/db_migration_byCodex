@@ -134,7 +134,7 @@ Claim 동기화는 다른 HTTP 400, 409 등 다른 상태, HTML/잘못된 JSON, 
 - POST와 PATCH는 자동 재시도하지 않습니다. 네트워크 오류, 5xx, 202, 408, 429, 애플리케이션 오류, 확인 응답 파싱 실패는 `uncertain`입니다. 해당 실행을 멈추고 이후 같은 업무 키도 보류합니다. 앞 절에서 정한 POST 400의 PATCH 전환은 한 번만 허용합니다.
 - 일반 4xx 및 redirect는 실패로 기록합니다. Claim은 지정된 POST 400 중복 오류, CSV는 모든 POST 400에서 PATCH로 전환합니다. Redirect를 따라 다른 서버로 인증 정보를 보내지 않습니다.
 - 기본 성공 조건은 오류 없는 2xx(202 제외). 예: `{"ok":true}`, `{"success":true}`와 204. `ok:false`도 애플리케이션 오류로 처리합니다. 서버가 `{"code":"OK"}`를 반환하면 `TARGET_SUCCESS_PATH=code`, `TARGET_SUCCESS_VALUE='"OK"'`를 설정할 수 있으며 POST와 PATCH 모두에 적용합니다.
-- 성공 ledger는 대상 URL + 모드 + 데이터셋 + 업무 키 설정으로 분리합니다. POST 또는 PATCH 성공 후 같은 전송 값은 건너뛰며 값이 달라지면 다시 POST부터 시작합니다. 인증 헤더의 tenant가 바뀌면 `TARGET_DATASET_ID`를 반드시 바꿉니다.
+- 성공 ledger는 대상 URL + 모드 + 데이터셋 + 업무 키 설정으로 분리합니다. POST 또는 PATCH 성공 후 같은 전송 값은 건너뛰며 값이 달라지면 다시 POST부터 시작합니다. CSV 파일 안에서 같은 업무 키가 반복되면 경고 후 해당 키의 행을 모두 파일 순서대로 전송합니다. 인증 헤더의 tenant가 바뀌면 `TARGET_DATASET_ID`를 반드시 바꿉니다.
 - 매 작업·값에 대한 `Idempotency-Key`를 전달하고 PATCH에는 POST와 다른 키를 사용합니다. 서버 지원 여부는 알 수 없으므로 정확히 한 번 전달을 보장한다고 가정하지 않습니다. 값이 A→B→A로 돌아와도 과거 A 요청의 응답이 재사용되지 않도록 작업 ID를 포함합니다.
 - 대상 DB에서 외부로 수정한 값이나 삭제한 행은 원본 값이 그대로라면 자동 감지하지 못합니다. 이 경우 대상 데이터셋 버전을 바꾸고 전체 재동기화하세요.
 - 중지/종료가 POST 또는 PATCH 도중 발생하면 반영 여부 확인을 보류합니다. 강제 종료 후 `sending` ledger는 다음 실행기 시작 시 `uncertain`으로 복구됩니다. 다음 실행의 보류 기록은 원래 실패한 POST 또는 PATCH의 상세 요청을 연결합니다.
@@ -151,10 +151,10 @@ Claim 동기화는 다른 HTTP 400, 409 등 다른 상태, HTML/잘못된 JSON, 
 | POST | /api/preview | 기간 및 기본 구간 수 계산 |
 | POST | /api/jobs | 실행 큐 등록 |
 | GET | /api/csv/files | CSV 폴더의 파일 목록·헤더 매핑·한도 |
-| POST | /api/csv/preview | filename·blank_mode로 전체 검증, 앞 50행·오류·sha256 반환 |
+| POST | /api/csv/preview | filename·blank_mode로 전체 확인. 전송 대상·제외 각 앞 50행, 경고 최대 100개와 전체 건수·sha256 반환 |
 | POST | /api/csv/jobs | filename·sha256·blank_mode·dry_run으로 검증된 CSV 작업 등록 |
 | GET | /api/jobs/{id} | 작업, 최근 400개 구간, 최근 500개 이벤트 |
-| GET | /api/jobs/{id}/records | 레코드 페이지·상태 필터 |
+| GET | /api/jobs/{id}/records | 레코드 페이지·상태 필터. CSV는 중복 행도 각각 csv_line·note와 업무 키를 반환 |
 | GET | /api/jobs/{id}/export | 전체 레코드 NDJSON 스트림 |
 | GET | /api/jobs/{id}/delivery-context | 이전 실행의 전송 확인 대기 원인과 요청 데이터 |
 | POST | /api/jobs/{id}/cancel | 중지 요청 |

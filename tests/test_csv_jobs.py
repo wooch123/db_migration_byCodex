@@ -372,7 +372,7 @@ def test_csv_web_preview_snapshot_retry_after_source_deleted_and_export(settings
         }
 
 
-def test_web_rejects_changed_file_and_all_rows_preflight_before_queue(settings):
+def test_web_rejects_changed_file_but_ignores_missing_values_after_new_preview(settings):
     path = write_csv(settings, "far,sample,담당자\nF1,01,Valid\n")
     app = create_app(settings)
     with TestClient(app, base_url="http://localhost") as client:
@@ -381,14 +381,23 @@ def test_web_rejects_changed_file_and_all_rows_preflight_before_queue(settings):
         changed = client.post("/api/csv/jobs", json={"filename": path.name, "sha256": old["sha256"]})
         assert changed.status_code == 422 and "변경" in changed.json()["detail"]
         current = client.post("/api/csv/preview", json={"filename": path.name}).json()
-        assert current["valid_rows"] == 1 and current["error_count"] == 1
-        assert current["errors"][0]["line"] == 3
-        rejected = client.post(
+        assert current["valid_rows"] == 1 and current["error_count"] == 0
+        assert current["skipped_count"] == 1
+        assert current["skipped_rows"][0]["line"] == 3
+        queued = client.post(
             "/api/csv/jobs", json={"filename": path.name, "sha256": current["sha256"], "dry_run": False}
         )
-        assert rejected.status_code == 422
-        for table in ("jobs", "csv_imports", "records", "deliveries", "http_exchanges"):
-            assert app.state.store.one(f"SELECT COUNT(*) n FROM {table}")["n"] == 0
+        assert queued.status_code == 202
+        job_id = queued.json()["id"]
+        asyncio.run(Engine(settings, app.state.store).run(job_id))
+        result = app.state.store.job(job_id)
+        assert result["status"] == "completed" and result["failed"] == 0
+        assert result["fetched"] == result["processed"] == 2
+        assert result["succeeded"] == result["skipped"] == 1
+        records = client.get(f"/api/jobs/{job_id}/records").json()["items"]
+        assert [(row["csv_line"], row["status"]) for row in records] == [(2, "sent"), (3, "skipped")]
+        assert records[1]["note"] and records[1]["error"] is None
+        assert app.state.store.one("SELECT COUNT(*) n FROM mock_target")["n"] == 1
 
 
 def test_preview_truncates_display_but_preflights_entire_file(settings):
@@ -398,13 +407,200 @@ def test_preview_truncates_display_but_preflights_entire_file(settings):
         preview = client.post("/api/csv/preview", json={"filename": path.name}).json()
         assert preview["total_rows"] == 61 and preview["valid_rows"] == 60
         assert len(preview["rows"]) == preview["preview_limit"] == 50
-        assert preview["errors"][0]["line"] == 62
+        assert preview["error_count"] == 0 and preview["skipped_count"] == 1
+        assert preview["skipped_rows"][0]["line"] == 62
         assert (
             client.post(
                 "/api/csv/jobs", json={"filename": path.name, "sha256": preview["sha256"]}
             ).status_code
-            == 422
+            == 202
         )
+
+
+@pytest.mark.parametrize("firmwares", [["A", "B", "A"], ["A", "A", "A"]])
+def test_csv_duplicate_rows_are_all_sent_in_order_and_exported_separately(settings, store, firmwares):
+    path = write_csv(settings, "far,sample,F/W\nF1,01,A\n")
+    asyncio.run(run_csv(settings, store, path))
+    write_csv(
+        settings,
+        f"far,sample,F/W\nF1,01,{firmwares[0]}\nF2,02,unique\nF1,01,{firmwares[1]}\nF1,01,{firmwares[2]}\n",
+    )
+    key = encode(["F1", "01"])
+    with TestClient(create_app(settings), base_url="http://localhost") as client:
+        preview = client.post("/api/csv/preview", json={"filename": path.name}).json()
+        assert preview["error_count"] == 0 and preview["warning_count"] >= 2
+        assert preview["valid_rows"] == 4 and preview["skipped_count"] == 0
+        queued = client.post(
+            "/api/csv/jobs",
+            json={"filename": path.name, "sha256": preview["sha256"], "dry_run": False},
+        )
+        assert queued.status_code == 202
+        job_id = queued.json()["id"]
+        asyncio.run(Engine(settings, store).run(job_id))
+        result = store.job(job_id)
+        assert result["status"] == "completed" and result["failed"] == result["skipped"] == 0
+        assert result["fetched"] == result["processed"] == result["succeeded"] == 4
+        logs = [
+            store.exchange(row["id"])
+            for row in store.query("SELECT id FROM http_exchanges WHERE job_id=? ORDER BY id", (job_id,))
+        ]
+        assert [row["method"] for row in logs] == ["POST", "PATCH", "POST", "POST", "PATCH", "POST", "PATCH"]
+        posted = [
+            json.loads(row["details"]["request"]["body"])["values"] for row in logs if row["method"] == "POST"
+        ]
+        assert [(row["far_no"], row["firmware"]) for row in posted] == [
+            ("F1", firmwares[0]),
+            ("F2", "unique"),
+            ("F1", firmwares[1]),
+            ("F1", firmwares[2]),
+        ]
+        patch_logs = [row for row in logs if row["method"] == "PATCH"]
+        assert [
+            json.loads(row["details"]["request"]["body"])["values"]["firmware"] for row in patch_logs
+        ] == firmwares
+        assert all(row["record_key"] == key for row in patch_logs)
+        assert all(f"CSV {line}행" in row["stage"] for row, line in zip(patch_logs, [2, 4, 5], strict=True))
+        operation_ids = [
+            next(
+                value
+                for name, value in row["details"]["request"]["headers"].items()
+                if name.casefold() == "idempotency-key"
+            )
+            for row in logs
+        ]
+        assert len(set(operation_ids)) == len(operation_ids)
+        records = client.get(f"/api/jobs/{job_id}/records").json()
+        assert records["total"] == len(records["items"]) == 4
+        assert [row["csv_line"] for row in records["items"]] == [2, 3, 4, 5]
+        duplicate_records = [row for row in records["items"] if row["record_key"] == key]
+        assert len(duplicate_records) == 3
+        assert all(
+            row["status"] == "sent" and row["note"] and row["error"] is None for row in duplicate_records
+        )
+        exported = [json.loads(line) for line in client.get(f"/api/jobs/{job_id}/export").text.splitlines()]
+        assert len(exported) == 4 and [row["csv_line"] for row in exported] == [2, 3, 4, 5]
+        assert [row["request"]["values"] for row in exported] == posted
+        assert [row["record_key"] for row in exported] == [key, encode(["F2", "02"]), key, key]
+        assert store.one("SELECT COUNT(*) n FROM deliveries")["n"] == 2
+        assert json.loads(store.delivery(settings.destination, key)["payload"])["firmware"] == firmwares[-1]
+        assert (
+            json.loads(store.one("SELECT payload FROM mock_target WHERE record_key=?", (key,))["payload"])[
+                "firmware"
+            ]
+            == firmwares[-1]
+        )
+        repeated = asyncio.run(run_csv(settings, store, path))
+        assert repeated["succeeded"] == 3 and repeated["skipped"] == 1
+        assert store.one("SELECT COUNT(*) n FROM http_exchanges WHERE job_id=?", (repeated["id"],))["n"] == 6
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_csv_only_empty_or_unidentifiable_rows_finish_without_http_or_errors(settings, store, dry_run):
+    path = write_csv(settings, "far,sample,F/W,담당자\nF1,01,,\nF2,,FW2,\n,03,,담당자\n")
+    settings.ca_bundle = str(settings.csv_dir / "missing-ca.pem")
+    job_id = enqueue_csv(settings, store, path.name, dry_run=dry_run)
+    calls = []
+    await Engine(settings, store, httpx.MockTransport(lambda request: calls.append(request))).run(job_id)
+    result = store.job(job_id)
+    assert (
+        result["status"] == "completed"
+        and result["failed"] == result["succeeded"] == result["uncertain"] == 0
+    )
+    assert result["fetched"] == result["processed"] == result["skipped"] == 3
+    records = store.query(
+        "SELECT status,error,note,csv_line FROM records WHERE job_id=? ORDER BY id", (job_id,)
+    )
+    assert [row["csv_line"] for row in records] == [2, 3, 4]
+    assert all(row["status"] == "skipped" and row["error"] is None and row["note"] for row in records)
+    assert not calls
+    for table in ("deliveries", "http_exchanges", "mock_target", "chunks"):
+        assert store.one(f"SELECT COUNT(*) n FROM {table}")["n"] == 0
+
+
+def test_csv_warning_and_skipped_preview_caps_do_not_drop_snapshot_rows(settings):
+    path = write_csv(
+        settings,
+        "far,sample,F/W\n"
+        + "".join(f"F1,01,FW{i}\n" for i in range(150))
+        + "".join(f"EMPTY{i},01,\n" for i in range(120)),
+    )
+    app = create_app(settings)
+    with TestClient(app, base_url="http://localhost") as client:
+        preview = client.post("/api/csv/preview", json={"filename": path.name}).json()
+        assert preview["total_rows"] == 270 and preview["valid_rows"] == 150
+        assert preview["error_count"] == 0 and preview["skipped_count"] == 120
+        assert len(preview["rows"]) == preview["preview_limit"] == 50
+        assert len(preview["skipped_rows"]) == preview["skipped_preview_limit"] == 50
+        assert preview["warning_count"] >= 149 and len(preview["warnings"]) == 100
+        queued = client.post("/api/csv/jobs", json={"filename": path.name, "sha256": preview["sha256"]})
+        assert queued.status_code == 202
+        job_id = queued.json()["id"]
+        snapshot = app.state.store.csv_snapshot(job_id)
+        assert len(snapshot["rows"]) == 150 and len(snapshot["skipped_rows"]) == 120
+        asyncio.run(Engine(settings, app.state.store).run(job_id))
+        result = client.get(f"/api/jobs/{job_id}").json()
+        assert result["status"] == "completed" and result["fetched"] == result["processed"] == 270
+        assert result["succeeded"] == 150 and result["skipped"] == 120 and result["failed"] == 0
+        assert client.get(f"/api/jobs/{job_id}/records").json()["total"] == 270
+        assert len(client.get(f"/api/jobs/{job_id}/export").text.splitlines()) == 270
+
+
+def test_csv_structural_row_error_beyond_preview_still_blocks_queue(settings):
+    path = write_csv(
+        settings, "far,sample,F/W\n" + "".join(f"F{i},01,FW\n" for i in range(60)) + "BROKEN,01,FW,extra\n"
+    )
+    app = create_app(settings)
+    with TestClient(app, base_url="http://localhost") as client:
+        preview = client.post("/api/csv/preview", json={"filename": path.name})
+        assert preview.status_code == 422 and "62" in preview.json()["detail"]
+        queued = client.post("/api/csv/jobs", json={"filename": path.name, "sha256": "0" * 64})
+        assert queued.status_code == 422
+        assert app.state.store.one("SELECT COUNT(*) n FROM jobs")["n"] == 0
+
+
+async def test_csv_duplicate_uncertain_patch_stops_next_occurrence_and_uses_business_ledger(settings, store):
+    path = write_csv(settings, "far,sample,F/W\nF1,01,A\nF1,01,B\nF1,01,C\nF2,02,D\n")
+    job_id = enqueue_csv(settings, store, path.name, dry_run=False)
+    calls = []
+    patches = []
+
+    def respond(request):
+        calls.append(request)
+        if request.method == "POST":
+            return httpx.Response(400, text="Bad Request")
+        patches.append(json.loads(request.content))
+        if len(patches) == 2:
+            raise httpx.ReadTimeout("PATCH acknowledgement lost")
+        return httpx.Response(200, json={"ok": True})
+
+    transport = httpx.MockTransport(respond)
+    await Engine(settings, store, transport).run(job_id)
+    result = store.job(job_id)
+    assert result["status"] == "needs_attention" and result["succeeded"] == result["uncertain"] == 1
+    assert [request.method for request in calls] == ["POST", "PATCH", "POST", "PATCH"]
+    assert [body["values"]["firmware"] for body in patches] == ["A", "B"]
+    key = encode(["F1", "01"])
+    delivery = store.delivery(settings.destination, key)
+    assert delivery["status"] == "uncertain" and json.loads(delivery["payload"])["firmware"] == "B"
+    assert store.one("SELECT COUNT(*) n FROM deliveries")["n"] == 1
+    original = store.exchange(
+        store.one("SELECT id FROM http_exchanges WHERE job_id=? ORDER BY id DESC LIMIT 1", (job_id,))["id"]
+    )
+    assert original["record_key"] == key and original["method"] == "PATCH" and "CSV 3행" in original["stage"]
+    with TestClient(create_app(settings), base_url="http://localhost") as client:
+        records = client.get(f"/api/jobs/{job_id}/records").json()["items"]
+        assert [(row["csv_line"], row["record_key"], row["status"]) for row in records] == [
+            (2, key, "sent"),
+            (3, key, "uncertain"),
+        ]
+        context = client.get(f"/api/jobs/{job_id}/delivery-context", params={"record_key": key}).json()
+        assert len(context) == 1 and context[0]["exchange_id"] == original["id"]
+    retry_id = enqueue_csv(settings, store, path.name, dry_run=False)
+    await Engine(settings, store, transport).run(retry_id)
+    assert store.job(retry_id)["status"] == "needs_attention" and len(calls) == 4
+    blocked = store.exchange(store.one("SELECT id FROM http_exchanges WHERE job_id=?", (retry_id,))["id"])
+    assert blocked["record_key"] == key and blocked["state"] == "blocked"
+    assert blocked["details"]["original"]["exchange_id"] == original["id"]
 
 
 def test_csv_routes_enforce_auth_origin_input_paths_and_live_write_gate(settings):

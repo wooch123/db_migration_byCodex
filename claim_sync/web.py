@@ -211,6 +211,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         for row in rows:
             row["payload"] = json.loads(row["payload"]) if row["payload"] else None
+            row["record_key"] = row.pop("business_key") or row["record_key"]
         return {
             "items": rows,
             "total": store.one(f"SELECT COUNT(*) n FROM records WHERE {clause}", params)["n"],
@@ -261,9 +262,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Older databases have payloads and the original delivery note, but no HTTP exchange rows.
         rows = store.query(
             """SELECT DISTINCT d.* FROM records r JOIN jobs j ON j.id=r.job_id
-            JOIN deliveries d ON d.destination=j.destination AND d.record_key=r.record_key
+            JOIN deliveries d ON d.destination=j.destination AND d.record_key=COALESCE(r.business_key,r.record_key)
             WHERE r.job_id=? AND r.status='uncertain'"""
-            + (" AND r.record_key=?" if record_key is not None else "")
+            + (" AND COALESCE(r.business_key,r.record_key)=?" if record_key is not None else "")
             + " LIMIT 50",
             (job_id, record_key) if record_key is not None else (job_id,),
         )
@@ -279,10 +280,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         def lines():
             with store.connect() as db:
                 for row in db.execute(
-                    "SELECT record_key,status,payload,error FROM records WHERE job_id=? ORDER BY id",
+                    "SELECT COALESCE(business_key,record_key) record_key,status,payload,error,csv_line,note FROM records WHERE job_id=? ORDER BY id",
                     (job_id,),
                 ):
                     item = dict(row)
+                    if item["csv_line"] is None:
+                        item.pop("csv_line")
+                        item.pop("note")
                     item["request"] = {"values": json.loads(item.pop("payload"))} if item["payload"] else None
                     item.pop("payload", None)
                     yield encode(item) + "\n"
@@ -332,7 +336,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             result = load_csv(settings, body.filename, body.blank_mode)
         except CsvImportError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return {**result, "rows": result["rows"][:50], "preview_limit": 50}
+        return {
+            **result,
+            "rows": result["rows"][:50],
+            "preview_limit": 50,
+            "skipped_rows": result.get("skipped_rows", [])[:50],
+            "skipped_preview_limit": 50,
+        }
 
     @app.post("/api/csv/jobs", status_code=202)
     def csv_job(body: CsvJobRequest):

@@ -9,10 +9,10 @@
     />
     <title>Claim Sync · 데이터 동기화</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/static/style.css?v=csv-import-2" />
-    <script src="/static/app.js?v=csv-import-2" defer></script>
-    <script src="/static/csv.js?v=csv-import-2" defer></script>
-    <script src="/static/inspector.js?v=csv-import-2" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=csv-import-4" />
+    <script src="/static/app.js?v=csv-import-4" defer></script>
+    <script src="/static/csv.js?v=csv-import-4" defer></script>
+    <script src="/static/inspector.js?v=csv-import-4" defer></script>
   </head>
   <body>
     <aside class="sidebar">
@@ -377,7 +377,7 @@
           <div class="card padded csv-source-card">
             <div class="card-heading"><div><h2>프로젝트 CSV 폴더</h2><p>CSV 파일을 아래 폴더에 저장한 뒤 목록을 새로고침하세요.<br>빈 양식은 <code>examples/far_import_template.csv</code>를 복사해서 사용하세요.</p></div><button class="button secondary small" id="csv-refresh">목록 새로고침</button></div>
             <code id="csv-directory" class="csv-directory">폴더 확인 중…</code>
-            <p id="csv-limits" class="help">far와 sample은 각 행의 필수 값입니다. 필요한 컬럼만 CSV에 포함할 수 있습니다.</p>
+            <p id="csv-limits" class="help">빈 필드는 전송에서 제외합니다. far 또는 sample이 비었거나 전송할 값이 없는 행은 건너뛰며, 중복 키는 경고 후 전송합니다.</p>
             <div id="csv-error" class="notice danger compact" role="alert" hidden></div>
             <div class="csv-input-grid">
               <div><label class="field-title" for="csv-file">가져올 파일</label><select id="csv-file" disabled><option value="">파일 목록을 불러오세요</option></select><p id="csv-file-meta" class="help">파일은 앱이 실행 중인 컴퓨터의 csv/ 폴더에서 읽습니다.</p></div>
@@ -391,6 +391,8 @@
             <div class="csv-preview-notices">
               <div id="csv-ignored" class="notice warning compact" hidden></div>
               <div id="csv-validation-errors" class="notice danger compact" hidden></div>
+              <div id="csv-validation-warnings" class="notice warning compact" hidden></div>
+              <div id="csv-skipped-rows" class="notice compact" hidden></div>
             </div>
             <div class="table-scroll"><table><thead><tr><th>CSV 행</th><th>FAR / SAMPLE</th><th>담당자</th><th>F/W</th><th>입력 필드</th><th>전송 JSON</th></tr></thead><tbody id="csv-preview-body"></tbody></table></div>
             <div class="csv-preview-footer"><p id="csv-preview-note" class="help"></p><div class="inline-buttons"><button class="button secondary" id="csv-validate" disabled>전송 없이 검증 실행</button><button class="button primary" id="csv-send" disabled>운영 API에 전송</button></div><p id="csv-send-hint" class="help">미리보기를 확인한 뒤 실행하세요.</p></div>
@@ -580,6 +582,7 @@
         </button>
       </div>
       <div id="payload-error" class="notice danger compact" hidden></div>
+      <div id="payload-note" class="notice compact" hidden></div>
       <pre id="payload-code"></pre>
       <div class="dialog-footer">
         <button class="button secondary" id="inspect-payload">요청 이력 보기</button>
